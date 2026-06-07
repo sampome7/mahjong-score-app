@@ -1086,6 +1086,37 @@ elif st.session_state.page == "session_manage":
             else:
                 st.info("まだ対戦結果は登録されていません。")
 
+        # 進行中の対戦会がある間は、新しい対戦会は作れないようにする
+        st.info("この対戦会が終了するまで、新しい対戦会は作成できません。")
+
+        st.markdown("---")
+        st.subheader("途中参加メンバーを追加")
+        st.caption("対戦会の途中でも、まだ参加していない登録メンバーを追加できます。")
+
+        joined_ids = get_session_member_ids(session_id)
+        not_joined = [p for p in players if int(p["id"]) not in joined_ids]
+
+        if not_joined:
+            for p in not_joined:
+                with st.container(border=True):
+                    c1, c2 = st.columns([3, 1], gap="small")
+                    with c1:
+                        st.markdown(
+                            f'<div class="member-id-label">ID: {p["id"]}</div><div class="member-name-label">{p["name"]}</div>',
+                            unsafe_allow_html=True,
+                        )
+                    with c2:
+                        st.markdown('<div class="button-spacer"></div>', unsafe_allow_html=True)
+                        if st.button("参加追加", key=f"session_manage_join_{p['id']}", use_container_width=True):
+                            ok, msg = add_player_to_session(session_id, p["id"])
+                            if ok:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.warning(msg)
+        else:
+            st.success("登録済みの表示メンバーは全員、この対戦会に参加しています。")
+
         st.markdown("---")
         st.subheader("対戦会の終了")
         st.caption("終了すると、この対戦会の累計結果画面へ移動します。後から再開することもできます。")
@@ -1115,6 +1146,7 @@ elif st.session_state.page == "session_manage":
 
         if active_sessions:
             st.subheader("進行中の対戦会を選択")
+            st.caption("進行中の対戦会があるため、新しい対戦会は作成できません。既存の対戦会を選択してください。")
             for s in active_sessions:
                 with st.container(border=True):
                     c1, c2 = st.columns([3, 1], gap="small")
@@ -1127,86 +1159,87 @@ elif st.session_state.page == "session_manage":
                             clear_hand_selection()
                             st.session_state.finish_confirm_session_id = None
                             st.rerun()
+        else:
+            st.markdown("---")
+            st.subheader("新しい対戦会を作成")
 
-    st.markdown("---")
-    st.subheader("新しい対戦会を作成")
-    # 日付を変更したら、対戦名の日付部分も自動で変更する
-    if "new_session_date" not in st.session_state:
-        st.session_state.new_session_date = date.today()
-    if "new_session_title_auto" not in st.session_state:
-        st.session_state.new_session_title_auto = True
-    if "new_session_title" not in st.session_state:
-        st.session_state.new_session_title = f"{st.session_state.new_session_date.strftime('%Y/%m/%d')} 麻雀"
+            # 日付を変更したら、対戦名の日付部分も自動で変更する
+            if "new_session_date" not in st.session_state:
+                st.session_state.new_session_date = date.today()
+            if "new_session_title_auto" not in st.session_state:
+                st.session_state.new_session_title_auto = True
+            if "new_session_title" not in st.session_state:
+                st.session_state.new_session_title = f"{st.session_state.new_session_date.strftime('%Y/%m/%d')} 麻雀"
 
-    previous_session_date = st.session_state.new_session_date
+            previous_session_date = st.session_state.new_session_date
 
-    session_date = st.date_input(
-        "日付",
-        key="new_session_date",
-    )
+            session_date = st.date_input(
+                "日付",
+                key="new_session_date",
+            )
 
-    auto_title = f"{session_date.strftime('%Y/%m/%d')} 麻雀"
-    previous_auto_title = f"{previous_session_date.strftime('%Y/%m/%d')} 麻雀"
+            auto_title = f"{session_date.strftime('%Y/%m/%d')} 麻雀"
+            previous_auto_title = f"{previous_session_date.strftime('%Y/%m/%d')} 麻雀"
 
-    # 対戦名が自動生成のまま、または前回の自動生成名のままなら、日付変更に合わせて更新
-    if st.session_state.new_session_title_auto or st.session_state.new_session_title == previous_auto_title:
-        st.session_state.new_session_title = auto_title
-        st.session_state.new_session_title_auto = True
+            # 対戦名が自動生成のまま、または前回の自動生成名のままなら、日付変更に合わせて更新
+            if st.session_state.new_session_title_auto or st.session_state.new_session_title == previous_auto_title:
+                st.session_state.new_session_title = auto_title
+                st.session_state.new_session_title_auto = True
 
-    title = st.text_input(
-        "対戦名",
-        key="new_session_title",
-    )
+            title = st.text_input(
+                "対戦名",
+                key="new_session_title",
+            )
 
-    # 手入力で対戦名を変えた場合は、以後その手入力を優先
-    st.session_state.new_session_title_auto = title == auto_title
+            # 手入力で対戦名を変えた場合は、以後その手入力を優先
+            st.session_state.new_session_title_auto = title == auto_title
 
-    if len(players) < 4:
-        st.warning("先に4人以上の名前を登録してください。")
-    else:
-        st.caption("最初に参加するメンバーを全員選んでください。途中参加は『名前登録』画面から追加できます。")
-        valid_ids = {p["id"] for p in players}
-        st.session_state.setup_session_player_ids = [pid for pid in st.session_state.setup_session_player_ids if pid in valid_ids]
-        st.info(f"現在 {len(st.session_state.setup_session_player_ids)} 人 選択中")
-
-        reset_col, _ = st.columns([1.3, 3.7])
-        with reset_col:
-            if st.button("参加者リセット", use_container_width=True):
-                st.session_state.setup_session_player_ids = []
-                st.rerun()
-
-        for p in players:
-            pid = p["id"]
-            is_selected = pid in st.session_state.setup_session_player_ids
-            with st.container(border=True):
-                c1, c2 = st.columns([3, 1], gap="small")
-                with c1:
-                    st.markdown(f"**{p['name']}**")
-                    st.caption(f"ID:{pid}")
-                with c2:
-                    if is_selected:
-                        if st.button("解除", key=f"setup_unselect_{pid}", use_container_width=True):
-                            st.session_state.setup_session_player_ids.remove(pid)
-                            st.rerun()
-                    else:
-                        if st.button("参加", key=f"setup_select_{pid}", use_container_width=True):
-                            st.session_state.setup_session_player_ids.append(pid)
-                            st.rerun()
-
-        if st.button("このメンバーで対戦会を開始", type="primary", use_container_width=True):
-            if len(st.session_state.setup_session_player_ids) < 4:
-                st.warning("参加者は4人以上必要です。")
+            if len(players) < 4:
+                st.warning("先に4人以上の名前を登録してください。")
             else:
-                sid = create_session(title, session_date, st.session_state.setup_session_player_ids)
-                if sid:
-                    st.session_state.current_session_id = sid
-                    st.session_state.setup_session_player_ids = []
-                    clear_hand_selection()
-                    st.session_state.finish_confirm_session_id = None
-                    st.success("対戦会を開始しました。")
-                    go("start")
-                else:
-                    st.error("対戦会の作成に失敗しました。")
+                st.caption("最初に参加するメンバーを全員選んでください。途中参加はこの画面から追加できます。")
+                valid_ids = {p["id"] for p in players}
+                st.session_state.setup_session_player_ids = [pid for pid in st.session_state.setup_session_player_ids if pid in valid_ids]
+                st.info(f"現在 {len(st.session_state.setup_session_player_ids)} 人 選択中")
+
+                reset_col, _ = st.columns([1.3, 3.7])
+                with reset_col:
+                    if st.button("参加者リセット", use_container_width=True):
+                        st.session_state.setup_session_player_ids = []
+                        st.rerun()
+
+                for p in players:
+                    pid = p["id"]
+                    is_selected = pid in st.session_state.setup_session_player_ids
+                    with st.container(border=True):
+                        c1, c2 = st.columns([3, 1], gap="small")
+                        with c1:
+                            st.markdown(f"**{p['name']}**")
+                            st.caption(f"ID:{pid}")
+                        with c2:
+                            if is_selected:
+                                if st.button("解除", key=f"setup_unselect_{pid}", use_container_width=True):
+                                    st.session_state.setup_session_player_ids.remove(pid)
+                                    st.rerun()
+                            else:
+                                if st.button("参加", key=f"setup_select_{pid}", use_container_width=True):
+                                    st.session_state.setup_session_player_ids.append(pid)
+                                    st.rerun()
+
+                if st.button("このメンバーで対戦会を開始", type="primary", use_container_width=True):
+                    if len(st.session_state.setup_session_player_ids) < 4:
+                        st.warning("参加者は4人以上必要です。")
+                    else:
+                        sid = create_session(title, session_date, st.session_state.setup_session_player_ids)
+                        if sid:
+                            st.session_state.current_session_id = sid
+                            st.session_state.setup_session_player_ids = []
+                            clear_hand_selection()
+                            st.session_state.finish_confirm_session_id = None
+                            st.success("対戦会を開始しました。")
+                            go("start")
+                        else:
+                            st.error("対戦会の作成に失敗しました。")
 
     if finished_sessions:
         st.markdown("---")
