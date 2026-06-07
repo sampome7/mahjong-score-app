@@ -17,6 +17,7 @@ HEADERS = {
 }
 
 APP_PASSWORD = st.secrets.get("APP_PASSWORD", "mahjong")
+ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "19831219")
 
 
 # =========================
@@ -139,6 +140,16 @@ def clear_score_data():
         return False, "対戦履歴の削除に失敗しました。"
 
     return True, "点数一覧・ランキング・個人成績・対戦履歴のデータを全て削除しました。"
+
+
+def get_game_count():
+    rows = api_get("games", {"select": "id"})
+    return len(rows)
+
+
+def get_result_count():
+    rows = api_get("game_results", {"select": "id"})
+    return len(rows)
 
 
 def get_next_game_no():
@@ -464,8 +475,8 @@ if "delete_confirm_id" not in st.session_state:
     st.session_state.delete_confirm_id = None
 if "edit_player_id" not in st.session_state:
     st.session_state.edit_player_id = None
-if "clear_scores_confirm" not in st.session_state:
-    st.session_state.clear_scores_confirm = False
+if "clear_scores_step" not in st.session_state:
+    st.session_state.clear_scores_step = 0
 if "selected_player_ids" not in st.session_state:
     st.session_state.selected_player_ids = []
 if "save_complete" not in st.session_state:
@@ -878,27 +889,50 @@ elif st.session_state.page == "settings":
     st.subheader("データ管理")
     st.warning("名前登録データは残したまま、点数一覧・ランキング・個人成績・過去の対戦履歴だけを削除します。")
 
-    if not st.session_state.clear_scores_confirm:
+    game_count = get_game_count()
+    result_count = get_result_count()
+    st.info(f"現在の対戦数：{game_count}戦 / 点数データ：{result_count}件")
+
+    if st.session_state.clear_scores_step == 0:
         if st.button("点数データを全削除", type="primary", use_container_width=True):
-            st.session_state.clear_scores_confirm = True
+            st.session_state.clear_scores_step = 1
             st.rerun()
-    else:
+
+    elif st.session_state.clear_scores_step == 1:
+        st.subheader("管理者確認")
+        admin_pw = st.text_input("管理者パスワード", type="password", key="admin_pw_clear_scores")
+        c1, c2 = st.columns(2, gap="small")
+        with c1:
+            if st.button("確認する", use_container_width=True):
+                if admin_pw == ADMIN_PASSWORD:
+                    st.session_state.clear_scores_step = 2
+                    st.rerun()
+                else:
+                    st.error("管理者パスワードが違います。")
+        with c2:
+            if st.button("キャンセル", use_container_width=True):
+                st.session_state.clear_scores_step = 0
+                st.rerun()
+
+    elif st.session_state.clear_scores_step == 2:
         st.error("本当に点数データを全て削除しますか？この操作は元に戻せません。")
+        st.write(f"削除対象：**{game_count}戦** / **{result_count}件**")
+        st.write("削除されないもの：**名前登録データ**")
+
         yes_col, no_col = st.columns(2, gap="small")
         with yes_col:
-            if st.button("はい、削除する", use_container_width=True):
+            if st.button("はい、削除します", use_container_width=True):
                 ok, msg = clear_score_data()
-                st.session_state.clear_scores_confirm = False
+                st.session_state.clear_scores_step = 0
                 if ok:
-                    # 対戦入力まわりの一時状態もリセット
                     for key in list(st.session_state.keys()):
-                        if key.startswith("score_input_") or key in ["selected_players", "save_complete"]:
+                        if key.startswith("score_input_") or key in ["selected_player_ids", "save_complete"]:
                             del st.session_state[key]
                     st.success(msg)
                     st.rerun()
                 else:
                     st.warning(msg)
         with no_col:
-            if st.button("いいえ、やめる", use_container_width=True):
-                st.session_state.clear_scores_confirm = False
+            if st.button("いいえ、やめます", use_container_width=True):
+                st.session_state.clear_scores_step = 0
                 st.rerun()
