@@ -443,6 +443,8 @@ if "edit_player_id" not in st.session_state:
     st.session_state.edit_player_id = None
 if "selected_player_ids" not in st.session_state:
     st.session_state.selected_player_ids = []
+if "save_complete" not in st.session_state:
+    st.session_state.save_complete = False
 
 
 def go(page):
@@ -612,6 +614,19 @@ elif st.session_state.page == "start":
     st.title("🎮 対戦スタート")
     back_button()
 
+    if st.session_state.get("save_complete", False):
+        st.session_state.selected_player_ids = []
+        for key in list(st.session_state.keys()):
+            if str(key).startswith("manual_point_"):
+                del st.session_state[key]
+
+        st.success("正常に登録されました。")
+        st.info("下のボタンを押すと、点数一覧へ移動します。")
+        if st.button("点数一覧を確認する", type="primary", use_container_width=True):
+            st.session_state.save_complete = False
+            go("score_list")
+        st.stop()
+
     players = get_players()
     if len(players) < 4:
         st.warning("先に4人以上の名前を登録してください。")
@@ -748,13 +763,8 @@ elif st.session_state.page == "start":
                 else:
                     ok = save_game(final_points, memo)
                     if ok:
-                        st.success("登録しました。")
-                        st.balloons()
-                        st.session_state.selected_player_ids = []
-                        for p in selected_players:
-                            key = f"manual_point_{p['id']}"
-                            if key in st.session_state:
-                                st.session_state[key] = 0
+                        st.session_state.save_complete = True
+                        st.rerun()
                     else:
                         st.error("登録に失敗しました。")
 
