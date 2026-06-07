@@ -674,13 +674,19 @@ def select_result_scope(results_required=True):
     sessions = get_sessions(include_finished=True)
     options = ["全期間"]
     labels_to_ids = {"全期間": None}
+    default_index = 0
+    default_session_id = st.session_state.get("result_scope_default_session_id")
+
     for s in sessions:
         label = f"{s.get('session_date') or ''}　{s.get('title') or '対戦会'}"
         if s.get("status") == "active":
             label += "（進行中）"
         options.append(label)
         labels_to_ids[label] = s["id"]
-    selected = st.selectbox("表示範囲", options)
+        if default_session_id is not None and int(s["id"]) == int(default_session_id):
+            default_index = len(options) - 1
+
+    selected = st.selectbox("表示範囲", options, index=default_index)
     return labels_to_ids[selected]
 
 
@@ -791,6 +797,17 @@ if "current_session_id" not in st.session_state:
     st.session_state.current_session_id = None
 if "save_complete" not in st.session_state:
     st.session_state.save_complete = False
+if "finish_confirm_session_id" not in st.session_state:
+    st.session_state.finish_confirm_session_id = None
+if "result_scope_default_session_id" not in st.session_state:
+    st.session_state.result_scope_default_session_id = None
+
+
+def clear_hand_selection():
+    st.session_state.selected_player_ids = []
+    for key in list(st.session_state.keys()):
+        if str(key).startswith("manual_point_"):
+            del st.session_state[key]
 
 
 def go(page):
@@ -824,6 +841,8 @@ if st.session_state.page == "home":
     col1, col2 = st.columns(2)
     with col1:
         if menu_button("対戦スタート", "🎮", "start"):
+            clear_hand_selection()
+            st.session_state.finish_confirm_session_id = None
             go("start")
         if menu_button("点数一覧", "📋", "score_list"):
             go("score_list")
@@ -977,9 +996,7 @@ elif st.session_state.page == "start":
     back_button()
 
     if st.session_state.get("save_complete", False):
-        for key in list(st.session_state.keys()):
-            if str(key).startswith("manual_point_"):
-                del st.session_state[key]
+        clear_hand_selection()
         st.success("正常に登録されました。")
         st.info("下のボタンを押すと、点数一覧へ移動します。")
         if st.button("点数一覧を確認する", type="primary", use_container_width=True):
@@ -1003,7 +1020,8 @@ elif st.session_state.page == "start":
                     with c2:
                         if st.button("再開", key=f"resume_session_{s['id']}", use_container_width=True):
                             st.session_state.current_session_id = s["id"]
-                            st.session_state.selected_player_ids = []
+                            clear_hand_selection()
+                            st.session_state.finish_confirm_session_id = None
                             st.rerun()
 
         st.markdown("---")
@@ -1045,7 +1063,8 @@ elif st.session_state.page == "start":
                     if sid:
                         st.session_state.current_session_id = sid
                         st.session_state.setup_session_player_ids = []
-                        st.session_state.selected_player_ids = []
+                        clear_hand_selection()
+                        st.session_state.finish_confirm_session_id = None
                         st.success("対戦会を開始しました。")
                         st.rerun()
                     else:
@@ -1072,17 +1091,33 @@ elif st.session_state.page == "start":
         if session_ranking:
             render_ranking_cards(session_ranking)
 
-        col_finish, col_leave = st.columns(2)
-        with col_finish:
-            if st.button("点数計算して対戦会を終了", type="primary", use_container_width=True):
-                update_session_status(session_id, "finished")
-                st.success("対戦会を終了しました。下に最終結果を表示しています。")
-                st.rerun()
-        with col_leave:
+        top_left, top_right = st.columns([2.7, 1.3])
+        with top_left:
             if st.button("対戦会選択へ戻る", use_container_width=True):
                 st.session_state.current_session_id = None
-                st.session_state.selected_player_ids = []
+                clear_hand_selection()
+                st.session_state.finish_confirm_session_id = None
                 st.rerun()
+        with top_right:
+            if st.button("点数計算して終了", type="primary", use_container_width=True):
+                st.session_state.finish_confirm_session_id = session_id
+                st.rerun()
+
+        if st.session_state.finish_confirm_session_id == session_id:
+            st.warning("本当に終了してよろしいですか？終了すると、この対戦会の累計結果画面へ移動します。")
+            yes_col, no_col = st.columns(2, gap="small")
+            with yes_col:
+                if st.button("はい、終了します", key=f"finish_yes_{session_id}", use_container_width=True):
+                    update_session_status(session_id, "finished")
+                    st.session_state.result_scope_default_session_id = session_id
+                    st.session_state.current_session_id = None
+                    st.session_state.finish_confirm_session_id = None
+                    clear_hand_selection()
+                    go("score_list")
+            with no_col:
+                if st.button("いいえ", key=f"finish_no_{session_id}", use_container_width=True):
+                    st.session_state.finish_confirm_session_id = None
+                    st.rerun()
 
         st.markdown("---")
         st.subheader("半荘を登録")
