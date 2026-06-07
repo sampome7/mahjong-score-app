@@ -1130,8 +1130,36 @@ elif st.session_state.page == "session_manage":
 
     st.markdown("---")
     st.subheader("新しい対戦会を作成")
-    session_date = st.date_input("日付", value=date.today(), key="new_session_date")
-    title = st.text_input("対戦名", value=f"{session_date.strftime('%Y/%m/%d')} 麻雀", key="new_session_title")
+    # 日付を変更したら、対戦名の日付部分も自動で変更する
+    if "new_session_date" not in st.session_state:
+        st.session_state.new_session_date = date.today()
+    if "new_session_title_auto" not in st.session_state:
+        st.session_state.new_session_title_auto = True
+    if "new_session_title" not in st.session_state:
+        st.session_state.new_session_title = f"{st.session_state.new_session_date.strftime('%Y/%m/%d')} 麻雀"
+
+    previous_session_date = st.session_state.new_session_date
+
+    session_date = st.date_input(
+        "日付",
+        key="new_session_date",
+    )
+
+    auto_title = f"{session_date.strftime('%Y/%m/%d')} 麻雀"
+    previous_auto_title = f"{previous_session_date.strftime('%Y/%m/%d')} 麻雀"
+
+    # 対戦名が自動生成のまま、または前回の自動生成名のままなら、日付変更に合わせて更新
+    if st.session_state.new_session_title_auto or st.session_state.new_session_title == previous_auto_title:
+        st.session_state.new_session_title = auto_title
+        st.session_state.new_session_title_auto = True
+
+    title = st.text_input(
+        "対戦名",
+        key="new_session_title",
+    )
+
+    # 手入力で対戦名を変えた場合は、以後その手入力を優先
+    st.session_state.new_session_title_auto = title == auto_title
 
     if len(players) < 4:
         st.warning("先に4人以上の名前を登録してください。")
