@@ -1,5 +1,7 @@
 import streamlit as st
 import requests
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # =========================
 # Supabase設定
@@ -18,7 +20,7 @@ APP_PASSWORD = st.secrets.get("APP_PASSWORD", "mahjong")
 
 
 # =========================
-# 共通関数
+# Supabase API
 # =========================
 def api_get(table, params=None):
     url = f"{SUPABASE_URL}/rest/v1/{table}"
@@ -38,9 +40,9 @@ def api_post(table, data):
     return response.json()
 
 
-def api_patch(table, record_id, data):
+def api_patch(table, row_id, data):
     url = f"{SUPABASE_URL}/rest/v1/{table}"
-    params = {"id": f"eq.{record_id}"}
+    params = {"id": f"eq.{row_id}"}
     response = requests.patch(url, headers=HEADERS, params=params, json=data)
     if response.status_code >= 400:
         st.error(response.text)
@@ -48,15 +50,23 @@ def api_patch(table, record_id, data):
     return response.json()
 
 
+def api_delete(table, row_id):
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    params = {"id": f"eq.{row_id}"}
+    response = requests.delete(url, headers=HEADERS, params=params)
+    if response.status_code >= 400:
+        st.error(response.text)
+        return False
+    return True
+
+
 # =========================
-# プレイヤー
+# データ操作
 # =========================
-def get_players(active_only=False):
-    params = {
-        "select": "id,name,created_at,is_active",
-        "order": "id.asc",
-    }
-    if active_only:
+def get_players(include_hidden=False):
+    select_cols = "id,name,created_at,is_active"
+    params = {"select": select_cols, "order": "id.asc"}
+    if not include_hidden:
         params["is_active"] = "eq.true"
     return api_get("players", params)
 
@@ -66,8 +76,9 @@ def add_player(name):
     if not name:
         return False, "名前を入力してください。"
 
-    players = get_players(active_only=False)
-    if any(p["name"] == name and p.get("is_active", True) for p in players):
+    players = get_players(include_hidden=True)
+    active_same = [p for p in players if p.get("name") == name and p.get("is_active", True)]
+    if active_same:
         return False, "同じ名前がすでに登録されています。"
 
     result = api_post("players", {"name": name, "is_active": True})
@@ -80,12 +91,6 @@ def update_player_name(player_id, new_name):
     new_name = new_name.strip()
     if not new_name:
         return False, "名前を入力してください。"
-
-    players = get_players(active_only=False)
-    for p in players:
-        if p["id"] != player_id and p["name"] == new_name and p.get("is_active", True):
-            return False, "同じ名前がすでに登録されています。"
-
     result = api_patch("players", player_id, {"name": new_name})
     if result is None:
         return False, "名前変更に失敗しました。"
@@ -99,9 +104,20 @@ def set_player_active(player_id, is_active):
     return True, "更新しました。"
 
 
-# =========================
-# 対戦保存・取得
-# =========================
+def player_has_results(player_id):
+    rows = api_get("game_results", {"select": "id", "player_id": f"eq.{player_id}", "limit": "1"})
+    return len(rows) > 0
+
+
+def delete_player(player_id):
+    if player_has_results(player_id):
+        return False, "このメンバーは対戦データがあるため削除できません。過去データを残すため、非表示を使ってください。"
+    ok = api_delete("players", player_id)
+    if not ok:
+        return False, "削除に失敗しました。"
+    return True, "削除しました。"
+
+
 def get_next_game_no():
     games = api_get("games", {"select": "game_no", "order": "game_no.desc", "limit": "1"})
     if not games:
@@ -118,11 +134,7 @@ def save_game(points, memo):
     game_id = game[0]["id"]
     rows = []
     for player_id, point in points.items():
-        rows.append({
-            "game_id": game_id,
-            "player_id": player_id,
-            "point": int(point),
-        })
+        rows.append({"game_id": game_id, "player_id": player_id, "point": int(point)})
 
     result = api_post("game_results", rows)
     return result is not None
@@ -155,19 +167,16 @@ def get_results():
 
 
 # =========================
-# 表作成
+# 集計
 # =========================
 def make_score_table(results):
     if not results:
         return []
-
     names = []
     for row in results:
         if row["name"] not in names:
             names.append(row["name"])
-
     game_nos = sorted(set(row["game_no"] for row in results if row["game_no"] is not None))
-
     table = []
     for name in names:
         line = {"名前": name}
@@ -182,7 +191,6 @@ def make_score_table(results):
             line[f"{game_no}回戦"] = value
         line["累計"] = total
         table.append(line)
-
     table.sort(key=lambda x: x["累計"], reverse=True)
     return table
 
@@ -193,15 +201,7 @@ def make_ranking(results):
         name = row["name"]
         point = int(row["point"])
         if name not in stats:
-            stats[name] = {
-                "名前": name,
-                "対戦数": 0,
-                "プラス回数": 0,
-                "マイナス回数": 0,
-                "合計点": 0,
-                "最高点": point,
-                "最低点": point,
-            }
+            stats[name] = {"名前": name, "対戦数": 0, "プラス回数": 0, "マイナス回数": 0, "合計点": 0, "最高点": point, "最低点": point}
         stats[name]["対戦数"] += 1
         stats[name]["合計点"] += point
         stats[name]["最高点"] = max(stats[name]["最高点"], point)
@@ -216,42 +216,99 @@ def make_ranking(results):
         count = data["対戦数"]
         plus_rate = data["プラス回数"] / count * 100 if count else 0
         avg = data["合計点"] / count if count else 0
-        table.append({
-            "名前": data["名前"],
-            "対戦数": count,
-            "合計点": data["合計点"],
-            "平均点": round(avg, 1),
-            "プラス率": f"{plus_rate:.1f}%",
-            "最高点": data["最高点"],
-            "最低点": data["最低点"],
-        })
+        table.append({"名前": data["名前"], "対戦数": count, "合計点": data["合計点"], "平均点": round(avg, 1), "プラス率": f"{plus_rate:.1f}%", "最高点": data["最高点"], "最低点": data["最低点"]})
     table.sort(key=lambda x: x["合計点"], reverse=True)
     return table
 
 
+# =========================
+# UI部品
+# =========================
 def menu_button(label, icon, key):
     return st.button(f"{icon}\n\n{label}", key=key, use_container_width=True)
 
 
+def back_button():
+    if st.button("← メニューへ戻る", key="back_home"):
+        go("home")
+
+
 # =========================
-# 画面設定
+# 画面設定・CSS
 # =========================
 st.set_page_config(page_title="麻雀スコア管理", page_icon="🀄", layout="wide")
 
 st.markdown(
     """
     <style>
+    html, body, [class*="css"] { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .block-container { padding-top: 1.4rem; padding-bottom: 2rem; max-width: 980px; }
+    h1 { font-size: 2.2rem !important; margin-bottom: .6rem !important; }
+    h2, h3 { margin-top: 1rem !important; }
     .stButton > button {
-        height: 110px;
-        font-size: 18px;
-        border-radius: 18px;
+        border-radius: 14px;
+        border: 1px solid #e5e7eb;
+        background: #ffffff;
+        color: #111827;
         font-weight: 700;
+        transition: 0.15s;
+    }
+    .stButton > button:hover { border-color: #ff4b4b; color: #ff4b4b; }
+
+    /* トップメニューだけ大きく見せる */
+    div[data-testid="column"] .stButton > button[kind="secondary"] {
+        min-height: 84px;
         white-space: pre-line;
+    }
+
+    /* フォーム系ボタンは小さめ */
+    div[data-testid="stHorizontalBlock"] .stButton > button {
+        min-height: 38px !important;
+        height: 38px !important;
+        padding: 0 .75rem !important;
+        font-size: .85rem !important;
+        border-radius: 10px !important;
+        white-space: nowrap !important;
+    }
+
+    /* primaryボタン */
+    .stButton > button[kind="primary"] {
+        background: #ff4b4b;
+        color: white;
+        border-color: #ff4b4b;
+    }
+
+    .member-card {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 16px;
+        padding: 12px 14px;
+        margin-bottom: 8px;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+    .member-id {
+        font-size: 12px;
+        color: #6b7280;
+        margin-bottom: 3px;
+    }
+    .section-card {
+        background: #fafafa;
+        border: 1px solid #eeeeee;
+        border-radius: 18px;
+        padding: 16px;
+        margin: 10px 0 18px 0;
+    }
+    @media (max-width: 640px) {
+        .block-container { padding-left: .85rem; padding-right: .85rem; }
+        h1 { font-size: 1.75rem !important; }
+        .stButton > button { font-size: .9rem; }
+        div[data-testid="column"] .stButton > button[kind="secondary"] { min-height: 70px; }
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
 
 # =========================
 # 簡易ログイン
@@ -271,11 +328,14 @@ if not st.session_state.login:
             st.error("合言葉が違います。")
     st.stop()
 
+
 # =========================
 # ページ状態
 # =========================
 if "page" not in st.session_state:
     st.session_state.page = "home"
+if "delete_confirm_id" not in st.session_state:
+    st.session_state.delete_confirm_id = None
 
 
 def go(page):
@@ -300,7 +360,6 @@ if st.session_state.page == "home":
             go("personal")
         if menu_button("過去の対戦履歴", "🕘", "history"):
             go("history")
-
     with col2:
         if menu_button("名前登録", "✏️", "players"):
             go("players")
@@ -313,75 +372,97 @@ if st.session_state.page == "home":
 
 
 # =========================
-# 名前登録・編集
+# 名前登録
 # =========================
 elif st.session_state.page == "players":
     st.title("✏️ 名前登録")
-    if st.button("← メニューへ戻る"):
-        go("home")
+    back_button()
 
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("参加者を登録")
-    new_name = st.text_input("名前")
-    if st.button("登録する", type="primary"):
+    new_name = st.text_input("名前", placeholder="例：小野", label_visibility="collapsed")
+    if st.button("＋ 登録する", type="primary", use_container_width=True):
         ok, msg = add_player(new_name)
         if ok:
             st.success(msg)
             st.rerun()
         else:
             st.warning(msg)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.divider()
     st.subheader("登録済みメンバー")
+    players = get_players(include_hidden=False)
+    hidden_players = get_players(include_hidden=True)
+    hidden_players = [p for p in hidden_players if not p.get("is_active", True)]
 
-    players = get_players(active_only=False)
-    active_players = [p for p in players if p.get("is_active", True)]
-    inactive_players = [p for p in players if not p.get("is_active", True)]
-
-    if active_players:
-        st.write("表示中のメンバー")
-        for p in active_players:
-            c1, c2, c3, c4 = st.columns([1, 4, 2, 2])
-            c1.write(f"ID: {p['id']}")
-            new_value = c2.text_input(
-                "名前",
-                value=p["name"],
-                key=f"edit_name_{p['id']}",
-                label_visibility="collapsed",
-            )
-            if c3.button("名前変更", key=f"update_{p['id']}"):
-                ok, msg = update_player_name(p["id"], new_value)
-                if ok:
-                    st.success(msg)
+    if players:
+        for p in players:
+            st.markdown('<div class="member-card">', unsafe_allow_html=True)
+            st.markdown(f'<div class="member-id">ID: {p["id"]}</div>', unsafe_allow_html=True)
+            c1, c2, c3, c4 = st.columns([6, 1.05, 1.05, 1.05])
+            with c1:
+                edited_name = st.text_input(
+                    "名前",
+                    value=p["name"],
+                    key=f"edit_name_{p['id']}",
+                    label_visibility="collapsed",
+                )
+            with c2:
+                if st.button("変更", key=f"update_{p['id']}", use_container_width=True):
+                    ok, msg = update_player_name(p["id"], edited_name)
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.warning(msg)
+            with c3:
+                if st.button("非表示", key=f"hide_{p['id']}", use_container_width=True):
+                    ok, msg = set_player_active(p["id"], False)
+                    if ok:
+                        st.success("非表示にしました。")
+                        st.rerun()
+                    else:
+                        st.warning(msg)
+            with c4:
+                if st.button("削除", key=f"delete_{p['id']}", use_container_width=True):
+                    st.session_state.delete_confirm_id = p["id"]
                     st.rerun()
-                else:
-                    st.warning(msg)
 
-            if c4.button("非表示", key=f"inactive_{p['id']}"):
-                ok, msg = set_player_active(p["id"], False)
-                if ok:
-                    st.success("非表示にしました。過去データは残ります。")
-                    st.rerun()
-                else:
-                    st.warning(msg)
+            if st.session_state.delete_confirm_id == p["id"]:
+                st.warning(f"{p['name']} さんを削除しますか？ 対戦データがある場合は削除できません。")
+                y_col, n_col, spacer = st.columns([1, 1, 5])
+                with y_col:
+                    if st.button("はい", key=f"delete_yes_{p['id']}", use_container_width=True):
+                        ok, msg = delete_player(p["id"])
+                        st.session_state.delete_confirm_id = None
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.warning(msg)
+                with n_col:
+                    if st.button("いいえ", key=f"delete_no_{p['id']}", use_container_width=True):
+                        st.session_state.delete_confirm_id = None
+                        st.rerun()
+
+            st.markdown('</div>', unsafe_allow_html=True)
     else:
         st.info("表示中のメンバーはいません。")
 
-    st.divider()
-    st.subheader("非表示メンバー")
-    if inactive_players:
-        for p in inactive_players:
-            c1, c2, c3 = st.columns([1, 4, 2])
-            c1.write(f"ID: {p['id']}")
-            c2.write(p["name"])
-            if c3.button("復活", key=f"active_{p['id']}"):
-                ok, msg = set_player_active(p["id"], True)
-                if ok:
-                    st.success("復活しました。")
-                    st.rerun()
-                else:
-                    st.warning(msg)
-    else:
-        st.info("非表示メンバーはいません。")
+    if hidden_players:
+        with st.expander("非表示メンバーを表示・復活"):
+            for p in hidden_players:
+                c1, c2 = st.columns([5, 1])
+                with c1:
+                    st.write(f"ID: {p['id']}　{p['name']}")
+                with c2:
+                    if st.button("復活", key=f"restore_{p['id']}", use_container_width=True):
+                        ok, msg = set_player_active(p["id"], True)
+                        if ok:
+                            st.success("復活しました。")
+                            st.rerun()
+                        else:
+                            st.warning(msg)
 
 
 # =========================
@@ -389,20 +470,14 @@ elif st.session_state.page == "players":
 # =========================
 elif st.session_state.page == "start":
     st.title("🎮 対戦スタート")
-    if st.button("← メニューへ戻る"):
-        go("home")
+    back_button()
 
-    players = get_players(active_only=True)
+    players = get_players()
     if len(players) < 4:
         st.warning("先に4人以上の名前を登録してください。")
     else:
         player_names = [p["name"] for p in players]
-        selected_names = st.multiselect(
-            "今回の4人を選択",
-            player_names,
-            default=player_names[:4],
-            max_selections=4,
-        )
+        selected_names = st.multiselect("今回の4人を選択", player_names, default=player_names[:4], max_selections=4)
         selected_players = [p for p in players if p["name"] in selected_names]
 
         if len(selected_players) != 4:
@@ -415,12 +490,7 @@ elif st.session_state.page == "start":
             for i, player in enumerate(selected_players):
                 with cols[i]:
                     if i < 3:
-                        point = st.number_input(
-                            f"{player['name']} の点数",
-                            value=0,
-                            step=5,
-                            key=f"point_{player['id']}",
-                        )
+                        point = st.number_input(f"{player['name']} の点数", value=0, step=5, key=f"point_{player['id']}")
                         points[player["id"]] = int(point)
                         total_manual += int(point)
                     else:
@@ -440,7 +510,7 @@ elif st.session_state.page == "start":
             st.subheader("登録前確認")
             st.table(preview)
 
-            if st.button("この対戦を登録する", type="primary"):
+            if st.button("この対戦を登録する", type="primary", use_container_width=True):
                 if total != 0:
                     st.error("合計が0になっていません。")
                 else:
@@ -457,9 +527,7 @@ elif st.session_state.page == "start":
 # =========================
 elif st.session_state.page == "score_list":
     st.title("📋 点数一覧")
-    if st.button("← メニューへ戻る"):
-        go("home")
-
+    back_button()
     results = get_results()
     table = make_score_table(results)
     if table:
@@ -473,9 +541,7 @@ elif st.session_state.page == "score_list":
 # =========================
 elif st.session_state.page == "ranking":
     st.title("🏆 ランキング")
-    if st.button("← メニューへ戻る"):
-        go("home")
-
+    back_button()
     results = get_results()
     table = make_ranking(results)
     if table:
@@ -489,9 +555,7 @@ elif st.session_state.page == "ranking":
 # =========================
 elif st.session_state.page == "personal":
     st.title("👤 個人成績")
-    if st.button("← メニューへ戻る"):
-        go("home")
-
+    back_button()
     results = get_results()
     names = sorted(set(r["name"] for r in results if r["name"]))
     if not names:
@@ -503,16 +567,12 @@ elif st.session_state.page == "personal":
         count = len(personal)
         avg = total / count if count else 0
         plus = len([r for r in personal if int(r["point"]) > 0])
-
         c1, c2, c3 = st.columns(3)
         c1.metric("対戦数", count)
         c2.metric("合計点", total)
         c3.metric("平均点", f"{avg:.1f}")
         st.write(f"プラス回数：{plus}回")
-        st.table([
-            {"回戦": r["game_no"], "点数": r["point"], "メモ": r["memo"] or ""}
-            for r in personal
-        ])
+        st.table([{"回戦": r["game_no"], "点数": r["point"], "メモ": r["memo"] or ""} for r in personal])
 
 
 # =========================
@@ -520,35 +580,26 @@ elif st.session_state.page == "personal":
 # =========================
 elif st.session_state.page == "history":
     st.title("🕘 過去の対戦履歴")
-    if st.button("← メニューへ戻る"):
-        go("home")
-
+    back_button()
     results = get_results()
     if not results:
         st.info("まだ履歴がありません。")
     else:
         history = []
         for r in results:
-            history.append({
-                "回戦": r["game_no"],
-                "名前": r["name"],
-                "点数": r["point"],
-                "メモ": r["memo"] or "",
-            })
+            history.append({"回戦": r["game_no"], "名前": r["name"], "点数": r["point"], "メモ": r["memo"] or ""})
         st.table(history)
 
 
 # =========================
-# 相性分析・設定は後で追加
+# 後で追加
 # =========================
 elif st.session_state.page == "matchup":
     st.title("🤝 相性分析")
-    if st.button("← メニューへ戻る"):
-        go("home")
+    back_button()
     st.info("次の追加機能として作ります。")
 
 elif st.session_state.page == "settings":
     st.title("⚙️ 設定")
-    if st.button("← メニューへ戻る"):
-        go("home")
+    back_button()
     st.info("次の追加機能として作ります。")
