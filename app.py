@@ -262,7 +262,6 @@ st.markdown(
         font-weight: 800 !important;
     }
 
-    /* 基本ボタン */
     .stButton > button {
         border-radius: 12px;
         border: 1px solid #d1d5db;
@@ -286,13 +285,11 @@ st.markdown(
         border-radius: 16px;
     }
 
-    /* トップメニュー */
     div[data-testid="column"] .stButton > button[kind="secondary"] {
         min-height: 84px;
         white-space: pre-line;
     }
 
-    /* 名前管理カード */
     div[data-testid="stVerticalBlockBorderWrapper"] {
         border-radius: 16px !important;
         border-color: #e5e7eb !important;
@@ -327,7 +324,6 @@ st.markdown(
         font-weight: 700;
     }
 
-    /* カード内ボタンだけ小さくする */
     div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button {
         min-height: 40px !important;
         height: 40px !important;
@@ -343,67 +339,49 @@ st.markdown(
         border-radius: 10px !important;
     }
 
-    /* 名前管理カードの操作ボタン色 */
-    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"]:first-of-type > div:nth-child(3) .stButton > button {
+    /* ボタン色 */
+    button[kind="secondary"][aria-label="非表示"] {
         border-color: #2563eb !important;
         color: #2563eb !important;
-        background: #eff6ff !important;
+    }
+    button[kind="secondary"][aria-label="削除"] {
+        border-color: #ef4444 !important;
+        color: #ef4444 !important;
     }
 
-    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"]:first-of-type > div:nth-child(3) .stButton > button:hover {
-        border-color: #1d4ed8 !important;
-        color: #1d4ed8 !important;
-        background: #dbeafe !important;
+    /* 対戦スタート画面 */
+    .score-card {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 14px;
+        padding: 10px 12px;
+        margin-bottom: 8px;
+    }
+    .score-order {
+        color: #6b7280;
+        font-size: .82rem;
+        font-weight: 700;
+        margin-bottom: 2px;
+    }
+    .score-name {
+        font-size: 1.15rem;
+        font-weight: 800;
+        color: #111827;
     }
 
-    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"]:first-of-type > div:nth-child(4) .stButton > button {
-        border-color: #dc2626 !important;
-        color: #dc2626 !important;
-        background: #fef2f2 !important;
-    }
-
-    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"]:first-of-type > div:nth-child(4) .stButton > button:hover {
-        border-color: #b91c1c !important;
-        color: #b91c1c !important;
-        background: #fee2e2 !important;
-    }
-
-    /* スマホ調整 */
     @media (max-width: 640px) {
         .block-container {
             padding-left: .85rem;
             padding-right: .85rem;
             max-width: 100% !important;
         }
-
-        h1 {
-            font-size: 1.75rem !important;
-        }
-
-        h2, h3 {
-            font-size: 1.35rem !important;
-        }
-
-        div[data-testid="column"] .stButton > button[kind="secondary"] {
-            min-height: 64px;
-        }
-
-        .member-id-label {
-            font-size: .72rem;
-        }
-
-        .member-name-label {
-            font-size: 1.05rem;
-        }
-
-        .button-spacer {
-            height: 1.05rem;
-        }
-
-        div[data-testid="stVerticalBlockBorderWrapper"] {
-            padding: .15rem !important;
-        }
-
+        h1 { font-size: 1.75rem !important; }
+        h2, h3 { font-size: 1.35rem !important; }
+        div[data-testid="column"] .stButton > button[kind="secondary"] { min-height: 64px; }
+        .member-id-label { font-size: .72rem; }
+        .member-name-label { font-size: 1.05rem; }
+        .button-spacer { height: 1.05rem; }
+        div[data-testid="stVerticalBlockBorderWrapper"] { padding: .15rem !important; }
         div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button {
             min-height: 34px !important;
             height: 34px !important;
@@ -411,12 +389,13 @@ st.markdown(
             font-size: .72rem !important;
             border-radius: 8px !important;
         }
-
         div[data-testid="stVerticalBlockBorderWrapper"] input {
             min-height: 36px !important;
             height: 36px !important;
             font-size: .9rem !important;
         }
+        .score-name { font-size: 1.05rem; }
+        .score-order { font-size: .76rem; }
     }
     </style>
     """,
@@ -452,6 +431,8 @@ if "delete_confirm_id" not in st.session_state:
     st.session_state.delete_confirm_id = None
 if "edit_player_id" not in st.session_state:
     st.session_state.edit_player_id = None
+if "selected_player_ids" not in st.session_state:
+    st.session_state.selected_player_ids = []
 
 
 def go(page):
@@ -513,9 +494,8 @@ elif st.session_state.page == "players":
 
     if players:
         for p in players:
-            # 1人分のカード
             with st.container(border=True):
-                name_col, change_col, hide_col, delete_col = st.columns([2.0, 1.05, 0.8, 0.65], gap="small")
+                name_col, change_col, hide_col, delete_col = st.columns([2.25, 1.05, 0.95, 0.85], gap="small")
 
                 with name_col:
                     st.markdown(
@@ -550,7 +530,6 @@ elif st.session_state.page == "players":
                         st.session_state.edit_player_id = None
                         st.rerun()
 
-                # 名前変更フォームはカード下部に表示
                 if st.session_state.edit_player_id == p["id"]:
                     st.markdown('<div class="inline-panel">名前を変更</div>', unsafe_allow_html=True)
                     edit_col, save_col, cancel_col = st.columns([3.0, 0.9, 0.9], gap="small")
@@ -575,7 +554,6 @@ elif st.session_state.page == "players":
                             st.session_state.edit_player_id = None
                             st.rerun()
 
-                # 削除確認はカード下部に表示
                 if st.session_state.delete_confirm_id == p["id"]:
                     st.warning(f"{p['name']} さんを削除しますか？")
                     yes_col, no_col, blank_col = st.columns([0.9, 0.9, 3.2], gap="small")
@@ -624,135 +602,114 @@ elif st.session_state.page == "start":
     st.title("🎮 対戦スタート")
     back_button()
 
-    # 選択状態を保持
-    if "selected_player_ids" not in st.session_state:
-        st.session_state.selected_player_ids = []
-
     players = get_players()
-
     if len(players) < 4:
         st.warning("先に4人以上の名前を登録してください。")
     else:
-        st.markdown("### 今日の4人を選択")
-        st.caption("登録済みメンバーから4人を選んでください。4人選ぶと点数入力へ進めます。")
+        st.subheader("参加者を4人選択")
+        id_to_player = {p["id"]: p for p in players}
+        options = [p["id"] for p in players]
 
-        selected_ids = st.session_state.selected_player_ids
-
-        # すでに非表示・削除されたIDが残っていた場合の掃除
-        active_ids = [p["id"] for p in players]
-        selected_ids = [pid for pid in selected_ids if pid in active_ids]
+        # 表示名はIDを使わず名前のみ
+        selected_ids = st.multiselect(
+            "今回の4人",
+            options=options,
+            default=st.session_state.selected_player_ids[:4] if st.session_state.selected_player_ids else [],
+            max_selections=4,
+            format_func=lambda pid: id_to_player[pid]["name"],
+        )
         st.session_state.selected_player_ids = selected_ids
 
-        # 選択中メンバー表示
-        selected_players = [p for p in players if p["id"] in selected_ids]
-        st.info(f"選択中：{len(selected_players)} / 4人")
+        if selected_ids:
+            selected_names_text = " / ".join([id_to_player[pid]["name"] for pid in selected_ids])
+            st.info(f"選択中：{selected_names_text}")
 
-        if selected_players:
-            selected_label = "　".join([f"{i+1}. {p['name']}" for i, p in enumerate(selected_players)])
-            st.markdown(f"**{selected_label}**")
+        reset_col, _ = st.columns([1, 3])
+        with reset_col:
+            if st.button("選択リセット", use_container_width=True):
+                st.session_state.selected_player_ids = []
+                # 点数入力もクリア
+                for p in players:
+                    key = f"manual_point_{p['id']}"
+                    if key in st.session_state:
+                        st.session_state[key] = 0
+                st.rerun()
 
-        if st.button("選択をリセット", use_container_width=True):
-            st.session_state.selected_player_ids = []
-            st.rerun()
-
-        st.markdown("---")
-
-        # プレイヤー選択カード
-        for p in players:
-            is_selected = p["id"] in st.session_state.selected_player_ids
-
-            with st.container(border=True):
-                name_col, btn_col = st.columns([2.8, 1.0], gap="small")
-                with name_col:
-                    mark = "✅" if is_selected else "▫️"
-                    st.markdown(
-                        f"""
-                        <div class="member-id-label">ID: {p["id"]}</div>
-                        <div class="member-name-label">{mark} {p["name"]}</div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-                with btn_col:
-                    st.markdown('<div class="button-spacer"></div>', unsafe_allow_html=True)
-                    if is_selected:
-                        if st.button("解除", key=f"unselect_{p['id']}", use_container_width=True):
-                            st.session_state.selected_player_ids = [pid for pid in st.session_state.selected_player_ids if pid != p["id"]]
-                            st.rerun()
-                    else:
-                        if st.button("選択", key=f"select_{p['id']}", use_container_width=True):
-                            if len(st.session_state.selected_player_ids) >= 4:
-                                st.warning("選択できるのは4人までです。")
-                            else:
-                                st.session_state.selected_player_ids.append(p["id"])
-                                st.rerun()
-
-        st.markdown("---")
-
-        # 点数入力
-        selected_players = [p for p in players if p["id"] in st.session_state.selected_player_ids]
-
-        if len(selected_players) < 4:
-            st.info("4人選択すると、点数入力画面が表示されます。")
-        elif len(selected_players) == 4:
-            st.markdown("### 半荘結果を入力")
-            st.caption("上から3人分を入力すると、4人目は自動で合計0になるように計算します。")
+        if len(selected_ids) != 4:
+            st.info("4人選択すると、半荘結果を入力できます。")
+        else:
+            selected_players = [id_to_player[pid] for pid in selected_ids]
+            st.markdown("---")
+            st.subheader("半荘結果を入力")
+            st.caption("全員手入力できます。点数は1刻みです。最後に入力する人は『±0入力』ボタンで自動調整できます。")
 
             points = {}
-            total_manual = 0
-
-            for i, player in enumerate(selected_players):
+            for i, player in enumerate(selected_players, start=1):
                 with st.container(border=True):
-                    left, right = st.columns([2.2, 1.2], gap="small")
-                    with left:
+                    name_col, score_col, auto_col = st.columns([2.0, 1.35, 0.9], gap="small")
+                    with name_col:
                         st.markdown(
                             f"""
-                            <div class="member-id-label">{i+1}人目</div>
-                            <div class="member-name-label">{player["name"]}</div>
+                            <div class="score-order">{i}人目</div>
+                            <div class="score-name">{player['name']}</div>
                             """,
                             unsafe_allow_html=True,
                         )
-                    with right:
-                        if i < 3:
-                            point = st.number_input(
-                                "点数",
-                                value=0,
-                                step=5,
-                                key=f"point_{player['id']}",
-                                label_visibility="collapsed",
-                            )
-                            points[player["id"]] = int(point)
-                            total_manual += int(point)
-                        else:
-                            auto_point = -total_manual
-                            points[player["id"]] = int(auto_point)
-                            st.metric("自動", auto_point)
+                    with score_col:
+                        key = f"manual_point_{player['id']}"
+                        if key not in st.session_state:
+                            st.session_state[key] = 0
+                        value = st.number_input(
+                            "点数",
+                            value=int(st.session_state[key]),
+                            step=1,
+                            key=key,
+                            label_visibility="collapsed",
+                        )
+                        points[player["id"]] = int(value)
+                    with auto_col:
+                        st.markdown('<div class="button-spacer"></div>', unsafe_allow_html=True)
+                        if st.button("±0入力", key=f"zero_fill_{player['id']}", use_container_width=True):
+                            other_sum = 0
+                            for other in selected_players:
+                                if other["id"] == player["id"]:
+                                    continue
+                                other_sum += int(st.session_state.get(f"manual_point_{other['id']}", 0))
+                            st.session_state[key] = -other_sum
+                            st.rerun()
 
-            total = sum(points.values())
+            total = sum(int(st.session_state.get(f"manual_point_{p['id']}", 0)) for p in selected_players)
+
             if total == 0:
                 st.success("合計は0です。登録できます。")
             else:
-                st.error(f"合計が {total} です。0になっていません。")
+                st.error(f"合計が {total} です。±0になっていないため登録できません。")
 
-            memo = st.text_input("メモ", placeholder="例：6/7 1回戦、休日麻雀 など")
+            memo = st.text_input("メモ", placeholder="例：6/7 1回目、休日麻雀 など")
 
-            st.markdown("### 登録前確認")
-            id_to_name = {p["id"]: p["name"] for p in selected_players}
+            st.subheader("登録前確認")
             preview = []
-            for pid, point in points.items():
-                preview.append({"名前": id_to_name[pid], "点数": point})
+            final_points = {}
+            for p in selected_players:
+                point = int(st.session_state.get(f"manual_point_{p['id']}", 0))
+                final_points[p["id"]] = point
+                preview.append({"名前": p["name"], "点数": point})
             preview.sort(key=lambda x: x["点数"], reverse=True)
             st.table(preview)
 
             if st.button("この対戦を登録する", type="primary", use_container_width=True):
                 if total != 0:
-                    st.error("合計が0になっていません。")
+                    st.error("合計が±0になっていないため登録できません。")
                 else:
-                    ok = save_game(points, memo)
+                    ok = save_game(final_points, memo)
                     if ok:
                         st.success("登録しました。")
                         st.balloons()
                         st.session_state.selected_player_ids = []
-                        st.rerun()
+                        for p in selected_players:
+                            key = f"manual_point_{p['id']}"
+                            if key in st.session_state:
+                                st.session_state[key] = 0
                     else:
                         st.error("登録に失敗しました。")
 
