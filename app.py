@@ -3,6 +3,7 @@ import requests
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from io import BytesIO
+import html as html_lib
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -852,6 +853,37 @@ def back_button():
         go("home")
 
 
+def render_sticky_score_table(rows):
+    """点数一覧を、左の名前列・上の回戦行を固定したHTMLテーブルで表示する。"""
+    if not rows:
+        st.info("まだデータがありません。")
+        return
+
+    headers = list(rows[0].keys())
+
+    def fmt(value):
+        if value is None:
+            return ""
+        return html_lib.escape(str(value))
+
+    html = ['<div class="sticky-table-wrap"><table class="sticky-score-table">']
+    html.append('<thead><tr>')
+    for i, h in enumerate(headers):
+        cls = 'sticky-col sticky-head-col' if i == 0 else ''
+        html.append(f'<th class="{cls}">{fmt(h)}</th>')
+    html.append('</tr></thead><tbody>')
+
+    for row in rows:
+        html.append('<tr>')
+        for i, h in enumerate(headers):
+            cls = 'sticky-col' if i == 0 else ''
+            html.append(f'<td class="{cls}">{fmt(row.get(h, ""))}</td>')
+        html.append('</tr>')
+
+    html.append('</tbody></table></div>')
+    st.markdown(''.join(html), unsafe_allow_html=True)
+
+
 def select_result_scope(results_required=True):
     sessions = get_sessions(include_finished=True)
     options = ["全期間"]
@@ -919,6 +951,56 @@ st.markdown(
     .score-card { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 10px 12px; margin-bottom: 8px; }
     .score-order { color: #6b7280; font-size: .82rem; font-weight: 700; margin-bottom: 2px; }
     .score-name { font-size: 1.15rem; font-weight: 800; color: #111827; }
+
+    /* 点数一覧：名前列と見出し行を固定 */
+    .sticky-table-wrap {
+        max-height: 68vh;
+        overflow: auto;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        background: #ffffff;
+        -webkit-overflow-scrolling: touch;
+    }
+    .sticky-score-table {
+        border-collapse: separate;
+        border-spacing: 0;
+        min-width: max-content;
+        width: max-content;
+        font-size: .9rem;
+    }
+    .sticky-score-table th,
+    .sticky-score-table td {
+        border-right: 1px solid #e5e7eb;
+        border-bottom: 1px solid #e5e7eb;
+        padding: 8px 10px;
+        text-align: center;
+        white-space: nowrap;
+        background: #ffffff;
+        min-width: 62px;
+    }
+    .sticky-score-table th {
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        background: #f8fafc;
+        color: #64748b;
+        font-weight: 800;
+    }
+    .sticky-score-table .sticky-col {
+        position: sticky;
+        left: 0;
+        z-index: 2;
+        background: #ffffff;
+        text-align: left;
+        font-weight: 800;
+        min-width: 86px;
+        box-shadow: 2px 0 0 #e5e7eb;
+    }
+    .sticky-score-table th.sticky-head-col {
+        z-index: 4;
+        background: #f1f5f9;
+    }
+
     @media (max-width: 640px) {
         .block-container { padding-left: .85rem; padding-right: .85rem; max-width: 100% !important; }
         h1 { font-size: 1.75rem !important; }
@@ -932,6 +1014,18 @@ st.markdown(
         div[data-testid="stVerticalBlockBorderWrapper"] input { min-height: 36px !important; height: 36px !important; font-size: .9rem !important; }
         .score-name { font-size: 1.05rem; }
         .score-order { font-size: .76rem; }
+        .sticky-table-wrap { max-height: 64vh; }
+        .sticky-score-table { font-size: .78rem; }
+        .sticky-score-table th, .sticky-score-table td {
+            padding: 7px 8px;
+            min-width: 50px;
+        }
+        .sticky-score-table .sticky-col {
+            min-width: 68px;
+            max-width: 78px;
+            white-space: normal;
+            word-break: keep-all;
+        }
     }
     </style>
     """,
@@ -1586,7 +1680,7 @@ elif st.session_state.page == "score_list":
 
     if table:
         st.subheader("点数一覧")
-        st.table(table)
+        render_sticky_score_table(table)
 
         st.markdown("---")
         with st.expander("⚠️ 管理者メニュー", expanded=False):
