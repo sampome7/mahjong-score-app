@@ -224,6 +224,16 @@ def make_ranking(results):
 # =========================
 # UI部品
 # =========================
+
+def zero_fill_point(current_player_id, selected_players):
+    """指定した人の点数を、全体合計が0になる値に自動調整する。"""
+    other_sum = 0
+    for other in selected_players:
+        if other["id"] == current_player_id:
+            continue
+        other_sum += int(st.session_state.get(f"manual_point_{other['id']}", 0))
+    st.session_state[f"manual_point_{current_player_id}"] = -other_sum
+
 def menu_button(label, icon, key):
     return st.button(f"{icon}\n\n{label}", key=key, use_container_width=True)
 
@@ -641,7 +651,7 @@ elif st.session_state.page == "start":
             selected_players = [id_to_player[pid] for pid in selected_ids]
             st.markdown("---")
             st.subheader("半荘結果を入力")
-            st.caption("全員手入力できます。点数は1刻みです。最後に入力する人は『±0入力』ボタンで自動調整できます。")
+            st.caption("全員手入力できます。点数は1刻みです。最後に入力する人は『集計』ボタンで合計0になる値を自動入力できます。")
 
             points = {}
             for i, player in enumerate(selected_players, start=1):
@@ -669,14 +679,13 @@ elif st.session_state.page == "start":
                         points[player["id"]] = int(value)
                     with auto_col:
                         st.markdown('<div class="button-spacer"></div>', unsafe_allow_html=True)
-                        if st.button("±0入力", key=f"zero_fill_{player['id']}", use_container_width=True):
-                            other_sum = 0
-                            for other in selected_players:
-                                if other["id"] == player["id"]:
-                                    continue
-                                other_sum += int(st.session_state.get(f"manual_point_{other['id']}", 0))
-                            st.session_state[key] = -other_sum
-                            st.rerun()
+                        st.button(
+                            "集計",
+                            key=f"zero_fill_{player['id']}",
+                            use_container_width=True,
+                            on_click=zero_fill_point,
+                            args=(player["id"], selected_players),
+                        )
 
             total = sum(int(st.session_state.get(f"manual_point_{p['id']}", 0)) for p in selected_players)
 
