@@ -343,6 +343,31 @@ st.markdown(
         border-radius: 10px !important;
     }
 
+    /* 名前管理カードの操作ボタン色 */
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"]:first-of-type > div:nth-child(3) .stButton > button {
+        border-color: #2563eb !important;
+        color: #2563eb !important;
+        background: #eff6ff !important;
+    }
+
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"]:first-of-type > div:nth-child(3) .stButton > button:hover {
+        border-color: #1d4ed8 !important;
+        color: #1d4ed8 !important;
+        background: #dbeafe !important;
+    }
+
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"]:first-of-type > div:nth-child(4) .stButton > button {
+        border-color: #dc2626 !important;
+        color: #dc2626 !important;
+        background: #fef2f2 !important;
+    }
+
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"]:first-of-type > div:nth-child(4) .stButton > button:hover {
+        border-color: #b91c1c !important;
+        color: #b91c1c !important;
+        background: #fee2e2 !important;
+    }
+
     /* スマホ調整 */
     @media (max-width: 640px) {
         .block-container {
@@ -490,7 +515,7 @@ elif st.session_state.page == "players":
         for p in players:
             # 1人分のカード
             with st.container(border=True):
-                name_col, change_col, hide_col, delete_col = st.columns([2.3, 0.72, 0.95, 0.72], gap="small")
+                name_col, change_col, hide_col, delete_col = st.columns([2.0, 1.05, 0.8, 0.65], gap="small")
 
                 with name_col:
                     st.markdown(
@@ -503,7 +528,7 @@ elif st.session_state.page == "players":
 
                 with change_col:
                     st.markdown('<div class="button-spacer"></div>', unsafe_allow_html=True)
-                    if st.button("変更", key=f"open_edit_{p['id']}", use_container_width=True):
+                    if st.button("名称変更", key=f"open_edit_{p['id']}", use_container_width=True):
                         st.session_state.edit_player_id = p["id"]
                         st.session_state.delete_confirm_id = None
                         st.rerun()
