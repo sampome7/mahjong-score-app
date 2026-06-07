@@ -532,15 +532,19 @@ def build_dashboard_metrics(results, players):
     ranking = make_enhanced_ranking(results)
     game_count = len(group_results_by_game(results))
     active_count = len(players)
-    top_name = ranking[0]["名前"] if ranking else "-"
-    top_point = ranking[0]["合計点"] if ranking else 0
     recent_game = make_game_summary(results)
     recent_label = recent_game[0]["label"] if recent_game else "まだ対戦がありません"
+
+    top4 = ranking[:4]
+    top_name = top4[0]["名前"] if top4 else "-"
+    top_point = top4[0]["合計点"] if top4 else 0
+
     return {
         "総対戦数": game_count,
         "登録メンバー": active_count,
         "現在1位": top_name,
         "1位合計点": top_point,
+        "上位4名": top4,
         "直近対戦": recent_label,
     }
 
@@ -764,6 +768,44 @@ st.markdown(
         color: #111827;
     }
 
+    .top-rank-name {
+        font-size: 1.75rem;
+        font-weight: 900;
+        color: #111827;
+        line-height: 1.15;
+        margin-top: .2rem;
+    }
+
+    .top-rank-point {
+        font-size: 2.1rem;
+        font-weight: 900;
+        color: #ff4b4b;
+        line-height: 1.15;
+        margin-top: .35rem;
+    }
+
+    .sub-rank-no {
+        font-size: .95rem;
+        font-weight: 800;
+        color: #6b7280;
+        padding-top: .25rem;
+    }
+
+    .sub-rank-name {
+        font-size: 1.05rem;
+        font-weight: 800;
+        color: #111827;
+        padding-top: .2rem;
+    }
+
+    .sub-rank-point {
+        font-size: 1.05rem;
+        font-weight: 900;
+        color: #374151;
+        text-align: right;
+        padding-top: .2rem;
+    }
+
     @media (max-width: 640px) {
         .block-container {
             padding-left: .85rem;
@@ -791,6 +833,11 @@ st.markdown(
         }
         .score-name { font-size: 1.05rem; }
         .score-order { font-size: .76rem; }
+        .top-rank-name { font-size: 1.45rem; }
+        .top-rank-point { font-size: 1.8rem; }
+        .sub-rank-no { font-size: .82rem; }
+        .sub-rank-name { font-size: .95rem; }
+        .sub-rank-point { font-size: .95rem; }
     }
     </style>
     """,
@@ -856,9 +903,35 @@ if st.session_state.page == "home":
     c1.metric("総対戦数", f"{metrics['総対戦数']}戦")
     c2.metric("登録メンバー", f"{metrics['登録メンバー']}人")
 
-    c3, c4 = st.columns(2)
-    c3.metric("現在1位", metrics["現在1位"])
-    c4.metric("1位合計点", f"{metrics['1位合計点']:+d}")
+    top4 = metrics.get("上位4名", [])
+
+    if top4:
+        top = top4[0]
+        with st.container(border=True):
+            st.markdown("### 🏆 現在1位")
+            st.markdown(
+                f"""
+                <div class="top-rank-name">{top['名前']}</div>
+                <div class="top-rank-point">{top['合計点']:+d} 点</div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        if len(top4) >= 2:
+            st.markdown("#### 2位〜4位")
+            for row in top4[1:4]:
+                with st.container(border=True):
+                    rank_col, name_col, point_col = st.columns([0.55, 2.4, 1.05], gap="small")
+                    with rank_col:
+                        st.markdown(f"<div class='sub-rank-no'>{row['順位']}位</div>", unsafe_allow_html=True)
+                    with name_col:
+                        st.markdown(f"<div class='sub-rank-name'>{row['名前']}</div>", unsafe_allow_html=True)
+                    with point_col:
+                        st.markdown(f"<div class='sub-rank-point'>{row['合計点']:+d}</div>", unsafe_allow_html=True)
+    else:
+        with st.container(border=True):
+            st.markdown("### 🏆 現在1位")
+            st.write("まだランキングデータがありません。")
 
     with st.container(border=True):
         st.markdown("**直近の対戦**")
