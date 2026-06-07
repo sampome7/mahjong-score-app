@@ -242,7 +242,8 @@ st.markdown(
     """
     <style>
     html, body, [class*="css"] { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    .block-container { padding-top: 1.4rem; padding-bottom: 2rem; max-width: 980px; }
+    .block-container { padding-top: 1.1rem; padding-bottom: 2rem; max-width: 760px; overflow-x: hidden; }
+    section.main > div { overflow-x: hidden; }
     h1 { font-size: 2.2rem !important; margin-bottom: .6rem !important; }
     h2, h3 { margin-top: 1rem !important; }
     .stButton > button {
@@ -276,17 +277,18 @@ st.markdown(
         color: #6b7280;
         font-size: 12px;
         font-weight: 700;
-        padding: 0 2px 4px 2px;
+        padding: 0 1px 2px 1px;
+        white-space: nowrap;
     }
     .member-row-sep {
         border-bottom: 1px solid #eeeeee;
-        margin: 2px 0 7px 0;
+        margin: 0 0 6px 0;
     }
     .small-id {
         color: #9ca3af;
         font-size: 11px;
-        margin-top: -8px;
-        margin-bottom: 3px;
+        display: inline;
+        margin-left: 4px;
     }
 
     /* primaryボタン */
@@ -323,35 +325,41 @@ st.markdown(
         .stButton > button { font-size: .86rem; }
         div[data-testid="column"] .stButton > button[kind="secondary"] { min-height: 64px; }
 
-        /* スマホでも名前管理だけは横一列を維持 */
+        /* スマホでは横スクロールを出さず、1画面内に収める */
         div[data-testid="stHorizontalBlock"] {
+            max-width: 100% !important;
+            overflow: hidden !important;
             flex-direction: row !important;
             flex-wrap: nowrap !important;
-            gap: .25rem !important;
-            align-items: center !important;
+            gap: .18rem !important;
+            align-items: flex-end !important;
         }
         div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
             min-width: 0 !important;
             width: auto !important;
-            flex: 1 1 0 !important;
+            flex-shrink: 1 !important;
         }
+        div[data-testid="stHorizontalBlock"] .stTextInput { margin-bottom: 0 !important; }
         div[data-testid="stHorizontalBlock"] .stTextInput input {
-            height: 38px !important;
-            min-height: 38px !important;
-            font-size: 15px !important;
-            padding: 0 .55rem !important;
+            height: 32px !important;
+            min-height: 32px !important;
+            font-size: 14px !important;
+            padding: 0 .45rem !important;
+            border-radius: 9px !important;
         }
         div[data-testid="stHorizontalBlock"] .stButton > button {
-            min-height: 34px !important;
-            height: 34px !important;
-            padding: 0 .25rem !important;
-            font-size: 12px !important;
-            border-radius: 8px !important;
+            min-height: 30px !important;
+            height: 30px !important;
+            padding: 0 .12rem !important;
+            font-size: 10px !important;
+            border-radius: 7px !important;
             white-space: nowrap !important;
+            line-height: 1 !important;
         }
-        .member-header { font-size: 10px; padding-bottom: 1px; }
-        .small-id { font-size: 9px; margin-top: -10px; }
-        .member-row-sep { margin: 0 0 4px 0; }
+        .member-header { font-size: 10px; padding-bottom: 0; }
+        .small-id { font-size: 9px; margin-left: 3px; }
+        .member-row-sep { margin: 0 0 3px 0; }
+        .section-card { padding: 10px; margin: 6px 0 14px 0; }
     }
     </style>
     """,
@@ -445,18 +453,18 @@ elif st.session_state.page == "players":
     hidden_players = [p for p in hidden_players if not p.get("is_active", True)]
 
     if players:
-        h1, h2, h3, h4 = st.columns([4.7, 0.95, 1.05, 0.95], gap="small")
+        h1, h2, h3, h4 = st.columns([2.75, 0.52, 0.62, 0.52], gap="small")
         with h1:
-            st.markdown('<div class="member-header">名前</div>', unsafe_allow_html=True)
+            st.markdown('<div class="member-header">名前 <span class="small-id">ID</span></div>', unsafe_allow_html=True)
         with h2:
-            st.markdown('<div class="member-header">変更</div>', unsafe_allow_html=True)
+            st.markdown('<div class="member-header">変</div>', unsafe_allow_html=True)
         with h3:
-            st.markdown('<div class="member-header">非表示</div>', unsafe_allow_html=True)
+            st.markdown('<div class="member-header">隠</div>', unsafe_allow_html=True)
         with h4:
-            st.markdown('<div class="member-header">削除</div>', unsafe_allow_html=True)
+            st.markdown('<div class="member-header">削</div>', unsafe_allow_html=True)
 
         for p in players:
-            c1, c2, c3, c4 = st.columns([4.7, 0.95, 1.05, 0.95], gap="small")
+            c1, c2, c3, c4 = st.columns([2.75, 0.52, 0.62, 0.52], gap="small")
             with c1:
                 edited_name = st.text_input(
                     "名前",
@@ -464,9 +472,9 @@ elif st.session_state.page == "players":
                     key=f"edit_name_{p['id']}",
                     label_visibility="collapsed",
                 )
-                st.markdown(f'<div class="small-id">ID: {p["id"]}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="small-id">ID:{p["id"]}</div>', unsafe_allow_html=True)
             with c2:
-                if st.button("変更", key=f"update_{p['id']}", use_container_width=True):
+                if st.button("変", key=f"update_{p['id']}", use_container_width=True):
                     ok, msg = update_player_name(p["id"], edited_name)
                     if ok:
                         st.success(msg)
@@ -474,7 +482,7 @@ elif st.session_state.page == "players":
                     else:
                         st.warning(msg)
             with c3:
-                if st.button("非表示", key=f"hide_{p['id']}", use_container_width=True):
+                if st.button("隠", key=f"hide_{p['id']}", use_container_width=True):
                     ok, msg = set_player_active(p["id"], False)
                     if ok:
                         st.success("非表示にしました。")
@@ -482,7 +490,7 @@ elif st.session_state.page == "players":
                     else:
                         st.warning(msg)
             with c4:
-                if st.button("削除", key=f"delete_{p['id']}", use_container_width=True):
+                if st.button("削", key=f"delete_{p['id']}", use_container_width=True):
                     st.session_state.delete_confirm_id = p["id"]
                     st.rerun()
 
