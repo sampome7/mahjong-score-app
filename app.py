@@ -115,6 +115,19 @@ def get_app_setting_int(setting_key, default_value=0):
         return int(default_value)
 
 
+def normalize_rate_value(value, step):
+    """過去に保存された 1 などの不正な初期値を0に戻す。"""
+    try:
+        value = int(value)
+    except Exception:
+        return 0
+    if value < 0:
+        return 0
+    if step > 0 and value % step != 0:
+        return 0
+    return value
+
+
 def save_app_setting(setting_key, setting_value):
     result = api_upsert(
         "app_settings",
@@ -1638,11 +1651,19 @@ elif st.session_state.page == "point_calc":
     if not base_rows:
         st.info("選択した範囲には、まだ計算対象のメンバーがいません。")
     else:
-        # Supabaseに保存されている最後の設定値を、画面初回表示時に読み込む
+        # Supabaseに保存されている最後の設定値を、画面初回表示時に読み込む。
+        # ただし、過去に保存された「1」など刻み幅に合わない値は0に戻す。
         if "point_calc_score_rate" not in st.session_state:
-            st.session_state.point_calc_score_rate = get_app_setting_int("point_calc_score_rate", 0)
+            saved_score_rate = get_app_setting_int("point_calc_score_rate", 0)
+            st.session_state.point_calc_score_rate = normalize_rate_value(saved_score_rate, 10)
+            if saved_score_rate != st.session_state.point_calc_score_rate:
+                save_app_setting("point_calc_score_rate", st.session_state.point_calc_score_rate)
+
         if "point_calc_chip_rate" not in st.session_state:
-            st.session_state.point_calc_chip_rate = get_app_setting_int("point_calc_chip_rate", 0)
+            saved_chip_rate = get_app_setting_int("point_calc_chip_rate", 0)
+            st.session_state.point_calc_chip_rate = normalize_rate_value(saved_chip_rate, 100)
+            if saved_chip_rate != st.session_state.point_calc_chip_rate:
+                save_app_setting("point_calc_chip_rate", st.session_state.point_calc_chip_rate)
 
         st.subheader("ポイント設定")
         rate_col1, rate_col2 = st.columns(2, gap="small")
