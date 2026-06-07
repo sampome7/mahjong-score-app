@@ -617,33 +617,69 @@ elif st.session_state.page == "start":
         st.warning("先に4人以上の名前を登録してください。")
     else:
         st.subheader("参加者を4人選択")
-        id_to_player = {p["id"]: p for p in players}
-        options = [p["id"] for p in players]
+        st.caption("名前の横のボタンを押すだけで選択・解除できます。4人まで選択できます。")
 
-        # 表示名はIDを使わず名前のみ
-        selected_ids = st.multiselect(
-            "今回の4人",
-            options=options,
-            default=st.session_state.selected_player_ids[:4] if st.session_state.selected_player_ids else [],
-            max_selections=4,
-            format_func=lambda pid: id_to_player[pid]["name"],
-        )
-        st.session_state.selected_player_ids = selected_ids
+        id_to_player = {p["id"]: p for p in players}
+
+        # 非表示などで存在しなくなったIDは選択状態から外す
+        valid_ids = {p["id"] for p in players}
+        st.session_state.selected_player_ids = [
+            pid for pid in st.session_state.selected_player_ids if pid in valid_ids
+        ]
+
+        selected_ids = st.session_state.selected_player_ids
+        st.info(f"現在 {len(selected_ids)} / 4人 選択中")
 
         if selected_ids:
             selected_names_text = " / ".join([id_to_player[pid]["name"] for pid in selected_ids])
-            st.info(f"選択中：{selected_names_text}")
+            st.success(f"選択中：{selected_names_text}")
 
-        reset_col, _ = st.columns([1, 3])
+        reset_col, _ = st.columns([1.2, 3.8])
         with reset_col:
             if st.button("選択リセット", use_container_width=True):
                 st.session_state.selected_player_ids = []
-                # 点数入力もクリア
                 for p in players:
                     key = f"manual_point_{p['id']}"
                     if key in st.session_state:
                         st.session_state[key] = 0
                 st.rerun()
+
+        st.markdown("#### メンバー一覧")
+
+        # 1行ずつカード表示。スマホでも反応が安定するようにmultiselectは使わない
+        for p in players:
+            pid = p["id"]
+            is_selected = pid in st.session_state.selected_player_ids
+
+            with st.container(border=True):
+                name_col, btn_col = st.columns([3.2, 1.0], gap="small")
+                with name_col:
+                    order_text = ""
+                    if is_selected:
+                        order_text = f"　{st.session_state.selected_player_ids.index(pid) + 1}人目"
+                    st.markdown(
+                        f"""
+                        <div class="member-id-label">ID: {pid}{order_text}</div>
+                        <div class="member-name-label">{p['name']}</div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                with btn_col:
+                    st.markdown('<div class="button-spacer"></div>', unsafe_allow_html=True)
+                    if is_selected:
+                        if st.button("解除", key=f"unselect_{pid}", use_container_width=True):
+                            st.session_state.selected_player_ids.remove(pid)
+                            key = f"manual_point_{pid}"
+                            if key in st.session_state:
+                                st.session_state[key] = 0
+                            st.rerun()
+                    else:
+                        disabled = len(st.session_state.selected_player_ids) >= 4
+                        if st.button("選択", key=f"select_{pid}", use_container_width=True, disabled=disabled):
+                            st.session_state.selected_player_ids.append(pid)
+                            st.rerun()
+
+        selected_ids = st.session_state.selected_player_ids
 
         if len(selected_ids) != 4:
             st.info("4人選択すると、半荘結果を入力できます。")
