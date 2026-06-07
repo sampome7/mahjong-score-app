@@ -45,6 +45,23 @@ def api_post(table, data):
     return response.json()
 
 
+def api_upsert(table, data, conflict_key):
+    """SupabaseのUPSERT。設定値など、同じキーなら上書きしたい時に使う。"""
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    headers = HEADERS.copy()
+    headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+    response = requests.post(
+        url,
+        headers=headers,
+        params={"on_conflict": conflict_key},
+        json=data,
+    )
+    if response.status_code >= 400:
+        st.error(response.text)
+        return None
+    return response.json()
+
+
 def api_patch(table, row_id, data):
     url = f"{SUPABASE_URL}/rest/v1/{table}"
     params = {"id": f"eq.{row_id}"}
@@ -72,6 +89,45 @@ def api_delete_where(table, params):
         st.error(response.text)
         return False
     return True
+
+
+# =========================
+# アプリ設定
+# =========================
+def get_app_setting(setting_key, default_value="0"):
+    """Supabaseのapp_settingsから設定値を取得する。"""
+    rows = api_get(
+        "app_settings",
+        {
+            "select": "setting_key,setting_value",
+            "setting_key": f"eq.{setting_key}",
+            "limit": "1",
+        },
+    )
+    if not rows:
+        return default_value
+    return rows[0].get("setting_value", default_value)
+
+
+def get_app_setting_int(setting_key, default_value=0):
+    try:
+        return int(get_app_setting(setting_key, str(default_value)))
+    except Exception:
+        return int(default_value)
+
+
+def save_app_setting(setting_key, setting_value):
+    """設定値を保存。次回以降も全員の画面で同じ値を使う。"""
+    result = api_upsert(
+        "app_settings",
+        {
+            "setting_key": str(setting_key),
+            "setting_value": str(setting_value),
+            "updated_at": datetime.now(ZoneInfo("Asia/Tokyo")).isoformat(),
+        },
+        "setting_key",
+    )
+    return result is not None
 
 
 # =========================
@@ -893,10 +949,13 @@ if "resume_confirm_session_id" not in st.session_state:
     st.session_state.resume_confirm_session_id = None
 if "result_scope_default_session_id" not in st.session_state:
     st.session_state.result_scope_default_session_id = None
-if "point_calc_score_rate" not in st.session_state:
-    st.session_state.point_calc_score_rate = 10
-if "point_calc_chip_rate" not in st.session_state:
-    st.session_state.point_calc_chip_rate = 100
+# 点数計算のレートはSupabaseに保存して、次回以降も前回値を使う
+if "point_calc_rates_loaded" not in st.session_state:
+    st.session_state.point_calc_score_rate = get_app_setting_int("point_calc_score_rate", 0)
+    st.session_state.point_calc_chip_rate = get_app_setting_int("point_calc_chip_rate", 0)
+    st.session_state.saved_point_calc_score_rate = int(st.session_state.point_calc_score_rate)
+    st.session_state.saved_point_calc_chip_rate = int(st.session_state.point_calc_chip_rate)
+    st.session_state.point_calc_rates_loaded = True
 
 
 def clear_hand_selection():
@@ -1579,7 +1638,7 @@ elif st.session_state.page == "point_calc":
                 score_rate = st.number_input(
                     "1点あたりのpt",
                     min_value=0,
-                    value=int(st.session_state.get("point_calc_score_rate", 10)),
+                    value=int(st.session_state.get("point_calc_score_rate", 0)),
                     step=10,
                     key="point_calc_score_rate",
                 )
@@ -1587,10 +1646,21 @@ elif st.session_state.page == "point_calc":
                 chip_rate = st.number_input(
                     "チップ1枚あたりのpt",
                     min_value=0,
-                    value=int(st.session_state.get("point_calc_chip_rate", 100)),
+                    value=int(st.session_state.get("point_calc_chip_rate", 0)),
                     step=100,
                     key="point_calc_chip_rate",
                 )
+
+            # 誰かが変更した最後の値をSupabaseに保存して、次回以降もそのまま使う
+            if int(score_rate) != int(st.session_state.get("saved_point_calc_score_rate", 0)):
+                if save_app_setting("point_calc_score_rate", int(score_rate)):
+                    st.session_state.saved_point_calc_score_rate = int(score_rate)
+
+            if int(chip_rate) != int(st.session_state.get("saved_point_calc_chip_rate", 0)):
+                if save_app_setting("point_calc_chip_rate", int(chip_rate)):
+                    st.session_state.saved_point_calc_chip_rate = int(chip_rate)
+
+            st.caption(f"現在の保存値：1点={int(score_rate)}pt / チップ1枚={int(chip_rate)}pt")
 
             st.markdown("---")
             st.subheader("計算表")
@@ -1647,11 +1717,31 @@ elif st.session_state.page == "point_calc":
                     "総合計": grand_total,
                 })
 
+            # 一番下に合計チェックを表示
+            score_total = sum(int(r["累計"]) for r in final_rows)
+            score_point_total = sum(int(r[f"点数pt（1点={score_rate}pt）"]) for r in final_rows)
+            chip_point_total = sum(int(r[f"チップpt（1枚={chip_rate}pt）"]) for r in final_rows)
+            grand_total_sum = sum(int(r["総合計"]) for r in final_rows)
+
             st.markdown("---")
-            if chip_total == 0:
-                st.success("チップ枚数の合計は0です。")
-            else:
+            st.markdown("### 合計チェック")
+            check_col1, check_col2, check_col3 = st.columns(3, gap="small")
+            check_col1.metric("累計合計", f"{score_total:+d}")
+            check_col2.metric("チップ合計", f"{chip_total:+d}")
+            check_col3.metric("総合計", f"{grand_total_sum:+d}")
+
+            sub_col1, sub_col2 = st.columns(2, gap="small")
+            sub_col1.metric("点数pt合計", f"{score_point_total:+d}")
+            sub_col2.metric("チップpt合計", f"{chip_point_total:+d}")
+
+            if score_total != 0:
+                st.error(f"累計合計が {score_total:+d} です。0になっていません。")
+            if chip_total != 0:
                 st.error(f"チップ枚数の合計が {chip_total:+d} です。0になるように入力してください。")
+            if grand_total_sum == 0 and score_total == 0 and chip_total == 0:
+                st.success("総合計は0です。")
+            elif grand_total_sum != 0:
+                st.error(f"総合計が {grand_total_sum:+d} です。0になっていません。")
 
             st.subheader("総合計ランキング")
             final_rows.sort(key=lambda x: x["総合計"], reverse=True)
