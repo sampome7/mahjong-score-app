@@ -1230,40 +1230,43 @@ elif st.session_state.page == "score_list":
         st.table(table)
 
         st.markdown("---")
-        st.subheader("対戦ごとの削除")
-        st.caption("間違えて登録した対戦だけを削除できます。名前登録データは削除されません。")
+        with st.expander("⚠️ 管理者メニュー", expanded=False):
+            st.markdown("### 指定の対戦削除")
+            st.caption("間違えて登録した対戦だけを削除できます。名前登録データは削除されません。")
 
-        game_summary = make_game_summary(results)
-        if game_summary:
-            options = {g["label"]: g for g in game_summary}
-            selected_label = st.selectbox("削除したい対戦を選択", list(options.keys()))
-            selected_game = options[selected_label]
+            game_summary = make_game_summary(results)
+            if game_summary:
+                options = {g["label"]: g for g in game_summary}
+                selected_label = st.selectbox("削除したい対戦を選択", list(options.keys()))
+                selected_game = options[selected_label]
 
-            st.markdown("**選択中の対戦**")
-            st.table([{"名前": m["name"], "点数": m["point"]} for m in selected_game["members"]])
-            if selected_game.get("memo"):
-                st.write(f"メモ：{selected_game['memo']}")
+                st.markdown("**選択中の対戦**")
+                st.table([{"名前": m["name"], "点数": m["point"]} for m in selected_game["members"]])
+                if selected_game.get("memo"):
+                    st.write(f"メモ：{selected_game['memo']}")
 
-            if st.session_state.delete_game_confirm_id != selected_game["game_id"]:
-                if st.button("この対戦を削除", use_container_width=True):
-                    st.session_state.delete_game_confirm_id = selected_game["game_id"]
-                    st.rerun()
-            else:
-                st.warning("この対戦を削除しますが、よろしいですか？")
-                yes_col, no_col = st.columns(2, gap="small")
-                with yes_col:
-                    if st.button("はい、削除します", use_container_width=True):
-                        ok, msg = delete_single_game(selected_game["game_id"])
-                        st.session_state.delete_game_confirm_id = None
-                        if ok:
-                            st.success(msg)
-                            st.rerun()
-                        else:
-                            st.warning(msg)
-                with no_col:
-                    if st.button("いいえ", use_container_width=True):
-                        st.session_state.delete_game_confirm_id = None
+                if st.session_state.delete_game_confirm_id != selected_game["game_id"]:
+                    if st.button("この対戦を削除", use_container_width=True):
+                        st.session_state.delete_game_confirm_id = selected_game["game_id"]
                         st.rerun()
+                else:
+                    st.warning("この対戦を削除しますが、よろしいですか？")
+                    yes_col, no_col = st.columns(2, gap="small")
+                    with yes_col:
+                        if st.button("はい、削除します", use_container_width=True):
+                            ok, msg = delete_single_game(selected_game["game_id"])
+                            st.session_state.delete_game_confirm_id = None
+                            if ok:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.warning(msg)
+                    with no_col:
+                        if st.button("いいえ", use_container_width=True):
+                            st.session_state.delete_game_confirm_id = None
+                            st.rerun()
+            else:
+                st.info("削除できる対戦データがありません。")
     else:
         st.info("まだデータがありません。")
 
