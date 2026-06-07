@@ -263,12 +263,30 @@ st.markdown(
 
     /* フォーム系ボタンは小さめ */
     div[data-testid="stHorizontalBlock"] .stButton > button {
-        min-height: 38px !important;
-        height: 38px !important;
-        padding: 0 .75rem !important;
-        font-size: .85rem !important;
-        border-radius: 10px !important;
+        min-height: 34px !important;
+        height: 34px !important;
+        padding: 0 .35rem !important;
+        font-size: .78rem !important;
+        border-radius: 9px !important;
         white-space: nowrap !important;
+    }
+
+    /* 名前管理の1行表示 */
+    .member-header {
+        color: #6b7280;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 0 2px 4px 2px;
+    }
+    .member-row-sep {
+        border-bottom: 1px solid #eeeeee;
+        margin: 2px 0 7px 0;
+    }
+    .small-id {
+        color: #9ca3af;
+        font-size: 11px;
+        margin-top: -8px;
+        margin-bottom: 3px;
     }
 
     /* primaryボタン */
@@ -396,10 +414,18 @@ elif st.session_state.page == "players":
     hidden_players = [p for p in hidden_players if not p.get("is_active", True)]
 
     if players:
+        h1, h2, h3, h4 = st.columns([5.6, 1.05, 1.05, 1.05], gap="small")
+        with h1:
+            st.markdown('<div class="member-header">名前</div>', unsafe_allow_html=True)
+        with h2:
+            st.markdown('<div class="member-header">変更</div>', unsafe_allow_html=True)
+        with h3:
+            st.markdown('<div class="member-header">非表示</div>', unsafe_allow_html=True)
+        with h4:
+            st.markdown('<div class="member-header">削除</div>', unsafe_allow_html=True)
+
         for p in players:
-            st.markdown('<div class="member-card">', unsafe_allow_html=True)
-            st.markdown(f'<div class="member-id">ID: {p["id"]}</div>', unsafe_allow_html=True)
-            c1, c2, c3, c4 = st.columns([6, 1.05, 1.05, 1.05])
+            c1, c2, c3, c4 = st.columns([5.6, 1.05, 1.05, 1.05], gap="small")
             with c1:
                 edited_name = st.text_input(
                     "名前",
@@ -407,6 +433,7 @@ elif st.session_state.page == "players":
                     key=f"edit_name_{p['id']}",
                     label_visibility="collapsed",
                 )
+                st.markdown(f'<div class="small-id">ID: {p["id"]}</div>', unsafe_allow_html=True)
             with c2:
                 if st.button("変更", key=f"update_{p['id']}", use_container_width=True):
                     ok, msg = update_player_name(p["id"], edited_name)
@@ -429,8 +456,8 @@ elif st.session_state.page == "players":
                     st.rerun()
 
             if st.session_state.delete_confirm_id == p["id"]:
-                st.warning(f"{p['name']} さんを削除しますか？ 対戦データがある場合は削除できません。")
-                y_col, n_col, spacer = st.columns([1, 1, 5])
+                st.warning(f"{p['name']} さんを削除しますか？")
+                y_col, n_col, spacer = st.columns([1.1, 1.1, 5.8], gap="small")
                 with y_col:
                     if st.button("はい", key=f"delete_yes_{p['id']}", use_container_width=True):
                         ok, msg = delete_player(p["id"])
@@ -445,7 +472,7 @@ elif st.session_state.page == "players":
                         st.session_state.delete_confirm_id = None
                         st.rerun()
 
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('<div class="member-row-sep"></div>', unsafe_allow_html=True)
     else:
         st.info("表示中のメンバーはいません。")
 
