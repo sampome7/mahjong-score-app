@@ -317,10 +317,41 @@ st.markdown(
         margin: 10px 0 18px 0;
     }
     @media (max-width: 640px) {
-        .block-container { padding-left: .85rem; padding-right: .85rem; }
-        h1 { font-size: 1.75rem !important; }
-        .stButton > button { font-size: .9rem; }
-        div[data-testid="column"] .stButton > button[kind="secondary"] { min-height: 70px; }
+        .block-container { padding-left: .75rem; padding-right: .75rem; }
+        h1 { font-size: 1.7rem !important; }
+        h2, h3 { font-size: 1.35rem !important; }
+        .stButton > button { font-size: .86rem; }
+        div[data-testid="column"] .stButton > button[kind="secondary"] { min-height: 64px; }
+
+        /* スマホでも名前管理だけは横一列を維持 */
+        div[data-testid="stHorizontalBlock"] {
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
+            gap: .25rem !important;
+            align-items: center !important;
+        }
+        div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+            min-width: 0 !important;
+            width: auto !important;
+            flex: 1 1 0 !important;
+        }
+        div[data-testid="stHorizontalBlock"] .stTextInput input {
+            height: 38px !important;
+            min-height: 38px !important;
+            font-size: 15px !important;
+            padding: 0 .55rem !important;
+        }
+        div[data-testid="stHorizontalBlock"] .stButton > button {
+            min-height: 34px !important;
+            height: 34px !important;
+            padding: 0 .25rem !important;
+            font-size: 12px !important;
+            border-radius: 8px !important;
+            white-space: nowrap !important;
+        }
+        .member-header { font-size: 10px; padding-bottom: 1px; }
+        .small-id { font-size: 9px; margin-top: -10px; }
+        .member-row-sep { margin: 0 0 4px 0; }
     }
     </style>
     """,
@@ -414,7 +445,7 @@ elif st.session_state.page == "players":
     hidden_players = [p for p in hidden_players if not p.get("is_active", True)]
 
     if players:
-        h1, h2, h3, h4 = st.columns([5.6, 1.05, 1.05, 1.05], gap="small")
+        h1, h2, h3, h4 = st.columns([4.7, 0.95, 1.05, 0.95], gap="small")
         with h1:
             st.markdown('<div class="member-header">名前</div>', unsafe_allow_html=True)
         with h2:
@@ -425,7 +456,7 @@ elif st.session_state.page == "players":
             st.markdown('<div class="member-header">削除</div>', unsafe_allow_html=True)
 
         for p in players:
-            c1, c2, c3, c4 = st.columns([5.6, 1.05, 1.05, 1.05], gap="small")
+            c1, c2, c3, c4 = st.columns([4.7, 0.95, 1.05, 0.95], gap="small")
             with c1:
                 edited_name = st.text_input(
                     "名前",
