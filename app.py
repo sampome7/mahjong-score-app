@@ -640,6 +640,35 @@ def build_dashboard_metrics(results, players):
     }
 
 
+
+
+def make_point_calculation_base(results):
+    """点数計算画面用：選択範囲内の各プレイヤー累計を作る。"""
+    if not results:
+        return []
+
+    rows_by_player = {}
+    for row in results:
+        pid = row.get("player_id")
+        name = row.get("name") or ""
+        if pid is None or not name:
+            continue
+
+        if pid not in rows_by_player:
+            rows_by_player[pid] = {
+                "player_id": pid,
+                "名前": name,
+                "累計": 0,
+            }
+
+        rows_by_player[pid]["名前"] = name
+        rows_by_player[pid]["累計"] += int(row.get("point") or 0)
+
+    rows = list(rows_by_player.values())
+    rows.sort(key=lambda x: x["累計"], reverse=True)
+    return rows
+
+
 def make_excel_file(results):
     wb = Workbook()
     ws = wb.active
