@@ -1,7 +1,5 @@
 import streamlit as st
 import requests
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 # =========================
 # Supabase設定
@@ -40,8 +38,27 @@ def api_post(table, data):
     return response.json()
 
 
-def get_players():
-    return api_get("players", {"select": "id,name,created_at", "order": "id.asc"})
+def api_patch(table, record_id, data):
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    params = {"id": f"eq.{record_id}"}
+    response = requests.patch(url, headers=HEADERS, params=params, json=data)
+    if response.status_code >= 400:
+        st.error(response.text)
+        return None
+    return response.json()
+
+
+# =========================
+# プレイヤー
+# =========================
+def get_players(active_only=False):
+    params = {
+        "select": "id,name,created_at,is_active",
+        "order": "id.asc",
+    }
+    if active_only:
+        params["is_active"] = "eq.true"
+    return api_get("players", params)
 
 
 def add_player(name):
@@ -49,16 +66,42 @@ def add_player(name):
     if not name:
         return False, "名前を入力してください。"
 
-    players = get_players()
-    if any(p["name"] == name for p in players):
+    players = get_players(active_only=False)
+    if any(p["name"] == name and p.get("is_active", True) for p in players):
         return False, "同じ名前がすでに登録されています。"
 
-    result = api_post("players", {"name": name})
+    result = api_post("players", {"name": name, "is_active": True})
     if result is None:
         return False, "登録に失敗しました。"
     return True, f"{name} を登録しました。"
 
 
+def update_player_name(player_id, new_name):
+    new_name = new_name.strip()
+    if not new_name:
+        return False, "名前を入力してください。"
+
+    players = get_players(active_only=False)
+    for p in players:
+        if p["id"] != player_id and p["name"] == new_name and p.get("is_active", True):
+            return False, "同じ名前がすでに登録されています。"
+
+    result = api_patch("players", player_id, {"name": new_name})
+    if result is None:
+        return False, "名前変更に失敗しました。"
+    return True, "名前を変更しました。"
+
+
+def set_player_active(player_id, is_active):
+    result = api_patch("players", player_id, {"is_active": is_active})
+    if result is None:
+        return False, "更新に失敗しました。"
+    return True, "更新しました。"
+
+
+# =========================
+# 対戦保存・取得
+# =========================
 def get_next_game_no():
     games = api_get("games", {"select": "game_no", "order": "game_no.desc", "limit": "1"})
     if not games:
@@ -86,7 +129,6 @@ def save_game(points, memo):
 
 
 def get_results():
-    # Supabaseの埋め込み取得
     rows = api_get(
         "game_results",
         {
@@ -112,6 +154,9 @@ def get_results():
     return results
 
 
+# =========================
+# 表作成
+# =========================
 def make_score_table(results):
     if not results:
         return []
@@ -268,7 +313,7 @@ if st.session_state.page == "home":
 
 
 # =========================
-# 名前登録
+# 名前登録・編集
 # =========================
 elif st.session_state.page == "players":
     st.title("✏️ 名前登録")
@@ -285,12 +330,58 @@ elif st.session_state.page == "players":
         else:
             st.warning(msg)
 
+    st.divider()
     st.subheader("登録済みメンバー")
-    players = get_players()
-    if players:
-        st.table([{"ID": p["id"], "名前": p["name"]} for p in players])
+
+    players = get_players(active_only=False)
+    active_players = [p for p in players if p.get("is_active", True)]
+    inactive_players = [p for p in players if not p.get("is_active", True)]
+
+    if active_players:
+        st.write("表示中のメンバー")
+        for p in active_players:
+            c1, c2, c3, c4 = st.columns([1, 4, 2, 2])
+            c1.write(f"ID: {p['id']}")
+            new_value = c2.text_input(
+                "名前",
+                value=p["name"],
+                key=f"edit_name_{p['id']}",
+                label_visibility="collapsed",
+            )
+            if c3.button("名前変更", key=f"update_{p['id']}"):
+                ok, msg = update_player_name(p["id"], new_value)
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.warning(msg)
+
+            if c4.button("非表示", key=f"inactive_{p['id']}"):
+                ok, msg = set_player_active(p["id"], False)
+                if ok:
+                    st.success("非表示にしました。過去データは残ります。")
+                    st.rerun()
+                else:
+                    st.warning(msg)
     else:
-        st.info("まだ登録されていません。")
+        st.info("表示中のメンバーはいません。")
+
+    st.divider()
+    st.subheader("非表示メンバー")
+    if inactive_players:
+        for p in inactive_players:
+            c1, c2, c3 = st.columns([1, 4, 2])
+            c1.write(f"ID: {p['id']}")
+            c2.write(p["name"])
+            if c3.button("復活", key=f"active_{p['id']}"):
+                ok, msg = set_player_active(p["id"], True)
+                if ok:
+                    st.success("復活しました。")
+                    st.rerun()
+                else:
+                    st.warning(msg)
+    else:
+        st.info("非表示メンバーはいません。")
 
 
 # =========================
@@ -301,7 +392,7 @@ elif st.session_state.page == "start":
     if st.button("← メニューへ戻る"):
         go("home")
 
-    players = get_players()
+    players = get_players(active_only=True)
     if len(players) < 4:
         st.warning("先に4人以上の名前を登録してください。")
     else:
