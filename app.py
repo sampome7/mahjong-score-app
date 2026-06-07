@@ -1,6 +1,6 @@
 import streamlit as st
 import requests
-from datetime import datetime
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from io import BytesIO
 
@@ -75,7 +75,7 @@ def api_delete_where(table, params):
 
 
 # =========================
-# データ操作
+# データ操作：プレイヤー
 # =========================
 def get_players(include_hidden=False):
     select_cols = "id,name,created_at,is_active"
@@ -132,96 +132,82 @@ def delete_player(player_id):
     return True, "削除しました。"
 
 
-def clear_score_data():
-    # 名前マスタ(players)は消さず、対戦結果だけ削除する
-    # 外部キーの関係があるため、game_results → games の順番で削除
-    ok_results = api_delete_where("game_results", {"id": "gte.0"})
-    if not ok_results:
-        return False, "点数データの削除に失敗しました。"
-
-    ok_games = api_delete_where("games", {"id": "gte.0"})
-    if not ok_games:
-        return False, "対戦履歴の削除に失敗しました。"
-
-    return True, "点数一覧・ランキング・個人成績・対戦履歴のデータを全て削除しました。"
+# =========================
+# データ操作：対戦会（セッション）
+# =========================
+def get_sessions(include_finished=True):
+    params = {"select": "id,title,session_date,status,created_at,finalized_at", "order": "session_date.desc,id.desc"}
+    if not include_finished:
+        params["status"] = "eq.active"
+    return api_get("match_sessions", params)
 
 
-def delete_single_game(game_id):
-    # 指定した1対戦だけ削除する。名前マスタ(players)は削除しない。
-    # 外部キーの関係があるため、game_results → games の順番で削除。
-    ok_results = api_delete_where("game_results", {"game_id": f"eq.{game_id}"})
-    if not ok_results:
-        return False, "この対戦の点数データ削除に失敗しました。"
-
-    ok_game = api_delete("games", game_id)
-    if not ok_game:
-        return False, "この対戦履歴の削除に失敗しました。"
-
-    return True, "指定した対戦を削除しました。"
+def get_session(session_id):
+    rows = api_get("match_sessions", {"select": "id,title,session_date,status,created_at,finalized_at", "id": f"eq.{session_id}", "limit": "1"})
+    return rows[0] if rows else None
 
 
-def make_game_summary(results):
-    if not results:
-        return []
-
-    games = {}
-    for row in results:
-        game_id = row.get("game_id")
-        if game_id is None:
-            continue
-        if game_id not in games:
-            games[game_id] = {
-                "game_id": game_id,
-                "game_no": row.get("game_no"),
-                "memo": row.get("memo") or "",
-                "played_at": row.get("played_at") or "",
-                "members": [],
-            }
-        games[game_id]["members"].append({
-            "name": row.get("name") or "",
-            "point": int(row.get("point") or 0),
-        })
-
-    summary = []
-    for game in games.values():
-        members_sorted = sorted(game["members"], key=lambda x: x["point"], reverse=True)
-        member_text = " / ".join([f"{m['name']} {m['point']:+d}" for m in members_sorted])
-        label = f"{game['game_no']}回戦　{member_text}"
-        if game["memo"]:
-            label += f"　メモ：{game['memo']}"
-        summary.append({
-            "game_id": game["game_id"],
-            "game_no": game["game_no"],
-            "label": label,
-            "members": members_sorted,
-            "memo": game["memo"],
-            "played_at": game["played_at"],
-        })
-
-    summary.sort(key=lambda x: x["game_no"] or 0, reverse=True)
-    return summary
+def create_session(title, session_date, player_ids):
+    title = title.strip() or f"{session_date} 麻雀"
+    created = api_post("match_sessions", {
+        "title": title,
+        "session_date": str(session_date),
+        "status": "active",
+    })
+    if not created:
+        return None
+    session_id = created[0]["id"]
+    rows = [{"session_id": session_id, "player_id": int(pid)} for pid in player_ids]
+    if rows:
+        api_post("session_players", rows)
+    return session_id
 
 
-def get_game_count():
-    rows = api_get("games", {"select": "id"})
+def update_session_status(session_id, status):
+    data = {"status": status}
+    if status == "finished":
+        data["finalized_at"] = datetime.now(ZoneInfo("Asia/Tokyo")).isoformat()
+    return api_patch("match_sessions", session_id, data)
+
+
+def get_session_players(session_id):
+    rows = api_get(
+        "session_players",
+        {
+            "select": "player_id,players(id,name,is_active)",
+            "session_id": f"eq.{session_id}",
+            "order": "player_id.asc",
+        },
+    )
+    players = []
+    for r in rows:
+        p = r.get("players") or {}
+        if p:
+            players.append({"id": p.get("id"), "name": p.get("name"), "is_active": p.get("is_active", True)})
+    return players
+
+
+def get_session_game_count(session_id):
+    rows = api_get("games", {"select": "id", "session_id": f"eq.{session_id}"})
     return len(rows)
 
 
-def get_result_count():
-    rows = api_get("game_results", {"select": "id"})
-    return len(rows)
-
-
-def get_next_game_no():
-    games = api_get("games", {"select": "game_no", "order": "game_no.desc", "limit": "1"})
+def get_next_game_no(session_id=None):
+    params = {"select": "game_no", "order": "game_no.desc", "limit": "1"}
+    if session_id is not None:
+        params["session_id"] = f"eq.{session_id}"
+    games = api_get("games", params)
     if not games:
         return 1
     return int(games[0]["game_no"]) + 1
 
 
-def save_game(points, memo):
-    game_no = get_next_game_no()
-    game = api_post("games", {"game_no": game_no, "memo": memo})
+def save_game(points, memo, session_id=None):
+    game_no = get_next_game_no(session_id)
+    game_data = {"game_no": game_no, "memo": memo}
+    if session_id is not None:
+        game_data["session_id"] = int(session_id)
+    game = api_post("games", game_data)
     if not game:
         return False
 
@@ -234,18 +220,20 @@ def save_game(points, memo):
     return result is not None
 
 
-def get_results():
-    rows = api_get(
-        "game_results",
-        {
-            "select": "id,point,created_at,games(id,game_no,memo,created_at),players(id,name)",
-            "order": "id.asc",
-        },
-    )
+def get_results(session_id=None):
+    if session_id is None:
+        select = "id,point,created_at,games(id,game_no,memo,created_at,session_id,match_sessions(id,title,session_date,status)),players(id,name)"
+        params = {"select": select, "order": "id.asc"}
+    else:
+        select = "id,point,created_at,games!inner(id,game_no,memo,created_at,session_id,match_sessions(id,title,session_date,status)),players(id,name)"
+        params = {"select": select, "games.session_id": f"eq.{session_id}", "order": "id.asc"}
+
+    rows = api_get("game_results", params)
 
     results = []
     for row in rows:
         game = row.get("games") or {}
+        session = game.get("match_sessions") or {}
         player = row.get("players") or {}
         results.append({
             "result_id": row.get("id"),
@@ -253,6 +241,10 @@ def get_results():
             "game_no": game.get("game_no"),
             "memo": game.get("memo"),
             "played_at": game.get("created_at"),
+            "session_id": game.get("session_id"),
+            "session_title": session.get("title") if session else None,
+            "session_date": session.get("session_date") if session else None,
+            "session_status": session.get("status") if session else None,
             "player_id": player.get("id"),
             "name": player.get("name"),
             "point": row.get("point", 0),
@@ -260,9 +252,53 @@ def get_results():
     return results
 
 
+def clear_score_data():
+    # 名前マスタ(players)は消さず、対戦会・対戦結果だけ削除する
+    if not api_delete_where("game_results", {"id": "gte.0"}):
+        return False, "点数データの削除に失敗しました。"
+    if not api_delete_where("games", {"id": "gte.0"}):
+        return False, "対戦履歴の削除に失敗しました。"
+    api_delete_where("session_players", {"session_id": "gte.0"})
+    api_delete_where("match_sessions", {"id": "gte.0"})
+    return True, "点数一覧・ランキング・個人成績・対戦履歴・対戦会データを全て削除しました。"
+
+
+def delete_single_game(game_id):
+    if not api_delete_where("game_results", {"game_id": f"eq.{game_id}"}):
+        return False, "この対戦の点数データ削除に失敗しました。"
+    if not api_delete("games", game_id):
+        return False, "この対戦履歴の削除に失敗しました。"
+    return True, "指定した対戦を削除しました。"
+
+
+def get_game_count(session_id=None):
+    params = {"select": "id"}
+    if session_id is not None:
+        params["session_id"] = f"eq.{session_id}"
+    rows = api_get("games", params)
+    return len(rows)
+
+
+def get_result_count():
+    rows = api_get("game_results", {"select": "id"})
+    return len(rows)
+
+
 # =========================
 # 集計
 # =========================
+def game_label_from_row(row):
+    no = row.get("game_no")
+    session_date = row.get("session_date")
+    if session_date:
+        try:
+            d = datetime.strptime(session_date, "%Y-%m-%d")
+            return f"{d.month}/{d.day} {no}回戦"
+        except Exception:
+            return f"{session_date} {no}回戦"
+    return f"{no}回戦"
+
+
 def make_score_table(results):
     if not results:
         return []
@@ -270,48 +306,31 @@ def make_score_table(results):
     for row in results:
         if row["name"] not in names:
             names.append(row["name"])
-    game_nos = sorted(set(row["game_no"] for row in results if row["game_no"] is not None))
+
+    labels = []
+    label_order = []
+    for row in results:
+        label = game_label_from_row(row)
+        if label not in labels:
+            labels.append(label)
+            label_order.append((row.get("session_date") or "", row.get("game_no") or 0, label))
+    labels = [x[2] for x in sorted(label_order, key=lambda x: (x[0], x[1]))]
+
     table = []
     for name in names:
         line = {"名前": name}
         total = 0
-        for game_no in game_nos:
+        for label in labels:
             value = ""
             for row in results:
-                if row["name"] == name and row["game_no"] == game_no:
+                if row["name"] == name and game_label_from_row(row) == label:
                     value = row["point"]
-                    total += row["point"]
+                    total += int(row["point"])
                     break
-            line[f"{game_no}回戦"] = value
+            line[label] = value
         line["累計"] = total
         table.append(line)
     table.sort(key=lambda x: x["累計"], reverse=True)
-    return table
-
-
-def make_ranking(results):
-    stats = {}
-    for row in results:
-        name = row["name"]
-        point = int(row["point"])
-        if name not in stats:
-            stats[name] = {"名前": name, "対戦数": 0, "プラス回数": 0, "マイナス回数": 0, "合計点": 0, "最高点": point, "最低点": point}
-        stats[name]["対戦数"] += 1
-        stats[name]["合計点"] += point
-        stats[name]["最高点"] = max(stats[name]["最高点"], point)
-        stats[name]["最低点"] = min(stats[name]["最低点"], point)
-        if point > 0:
-            stats[name]["プラス回数"] += 1
-        elif point < 0:
-            stats[name]["マイナス回数"] += 1
-
-    table = []
-    for data in stats.values():
-        count = data["対戦数"]
-        plus_rate = data["プラス回数"] / count * 100 if count else 0
-        avg = data["合計点"] / count if count else 0
-        table.append({"名前": data["名前"], "対戦数": count, "合計点": data["合計点"], "平均点": round(avg, 1), "プラス率": f"{plus_rate:.1f}%", "最高点": data["最高点"], "最低点": data["最低点"]})
-    table.sort(key=lambda x: x["合計点"], reverse=True)
     return table
 
 
@@ -327,6 +346,9 @@ def group_results_by_game(results):
                 "game_no": row.get("game_no"),
                 "memo": row.get("memo") or "",
                 "played_at": row.get("played_at") or "",
+                "session_id": row.get("session_id"),
+                "session_title": row.get("session_title"),
+                "session_date": row.get("session_date"),
                 "members": [],
             }
         games[game_id]["members"].append({
@@ -434,14 +456,15 @@ def make_personal_detail(results, target_name):
     stats, games = build_player_stats(results)
     personal_rows = []
     cumulative = 0
-    for game in sorted(games.values(), key=lambda g: g.get("game_no") or 0):
+    for game in sorted(games.values(), key=lambda g: ((g.get("session_date") or ""), g.get("game_no") or 0)):
         members = game["members"]
         target = next((m for m in members if m["name"] == target_name), None)
         if not target:
             continue
         cumulative += int(target["point"])
+        label = game_label_from_row({"game_no": game.get("game_no"), "session_date": game.get("session_date")})
         personal_rows.append({
-            "回戦": game.get("game_no"),
+            "回戦": label,
             "順位": target.get("rank"),
             "点数": int(target["point"]),
             "累計": cumulative,
@@ -516,9 +539,13 @@ def make_matchup_table(results, target_name):
 def make_history_table(results):
     games = add_rank_to_games(group_results_by_game(results))
     history = []
-    for game in sorted(games.values(), key=lambda g: g.get("game_no") or 0, reverse=True):
+    for game in sorted(games.values(), key=lambda g: ((g.get("session_date") or ""), g.get("game_no") or 0), reverse=True):
+        session_name = game.get("session_title") or "未分類"
+        session_date = game.get("session_date") or ""
         for m in game["members"]:
             history.append({
+                "対戦会": session_name,
+                "日付": session_date,
                 "回戦": game.get("game_no"),
                 "順位": m.get("rank"),
                 "名前": m.get("name"),
@@ -528,23 +555,42 @@ def make_history_table(results):
     return history
 
 
+def make_game_summary(results):
+    if not results:
+        return []
+    games = add_rank_to_games(group_results_by_game(results))
+    summary = []
+    for game in games.values():
+        members_sorted = sorted(game["members"], key=lambda x: x["point"], reverse=True)
+        member_text = " / ".join([f"{m['name']} {m['point']:+d}" for m in members_sorted])
+        session_date = game.get("session_date") or ""
+        title = game.get("session_title") or "未分類"
+        label = f"{session_date} {title}　{game['game_no']}回戦　{member_text}"
+        if game["memo"]:
+            label += f"　メモ：{game['memo']}"
+        summary.append({
+            "game_id": game["game_id"],
+            "game_no": game["game_no"],
+            "session_id": game.get("session_id"),
+            "label": label,
+            "members": members_sorted,
+            "memo": game["memo"],
+            "played_at": game["played_at"],
+        })
+    summary.sort(key=lambda x: (x.get("played_at") or "", x.get("game_no") or 0), reverse=True)
+    return summary
+
+
 def build_dashboard_metrics(results, players):
     ranking = make_enhanced_ranking(results)
-    game_count = len(group_results_by_game(results))
+    games = group_results_by_game(results)
     active_count = len(players)
     recent_game = make_game_summary(results)
     recent_label = recent_game[0]["label"] if recent_game else "まだ対戦がありません"
-
-    top4 = ranking[:4]
-    top_name = top4[0]["名前"] if top4 else "-"
-    top_point = top4[0]["合計点"] if top4 else 0
-
     return {
-        "総対戦数": game_count,
+        "総対戦数": len(games),
         "登録メンバー": active_count,
-        "現在1位": top_name,
-        "1位合計点": top_point,
-        "上位4名": top4,
+        "ランキング": ranking,
         "直近対戦": recent_label,
     }
 
@@ -558,14 +604,8 @@ def make_excel_file(results):
         "点数一覧": make_score_table(results),
         "ランキング": make_enhanced_ranking(results),
         "対戦履歴": make_history_table(results),
+        "個人成績": make_enhanced_ranking(results),
     }
-
-    # 個人成績サマリー
-    personal_summary = []
-    ranking = make_enhanced_ranking(results)
-    for r in ranking:
-        personal_summary.append(r.copy())
-    sheets["個人成績"] = personal_summary
 
     header_fill = PatternFill("solid", fgColor="1F4E79")
     header_font = Font(color="FFFFFF", bold=True)
@@ -609,19 +649,17 @@ def make_excel_file(results):
     return bio.getvalue()
 
 
-
 # =========================
 # UI部品
 # =========================
-
 def zero_fill_point(current_player_id, selected_players):
-    """指定した人の点数を、全体合計が0になる値に自動調整する。"""
     other_sum = 0
     for other in selected_players:
         if other["id"] == current_player_id:
             continue
         other_sum += int(st.session_state.get(f"manual_point_{other['id']}", 0))
     st.session_state[f"manual_point_{current_player_id}"] = -other_sum
+
 
 def menu_button(label, icon, key):
     return st.button(f"{icon}\n\n{label}", key=key, use_container_width=True)
@@ -632,6 +670,41 @@ def back_button():
         go("home")
 
 
+def select_result_scope(results_required=True):
+    sessions = get_sessions(include_finished=True)
+    options = ["全期間"]
+    labels_to_ids = {"全期間": None}
+    for s in sessions:
+        label = f"{s.get('session_date') or ''}　{s.get('title') or '対戦会'}"
+        if s.get("status") == "active":
+            label += "（進行中）"
+        options.append(label)
+        labels_to_ids[label] = s["id"]
+    selected = st.selectbox("表示範囲", options)
+    return labels_to_ids[selected]
+
+
+def render_ranking_cards(ranking):
+    if not ranking:
+        st.info("まだランキングデータがありません。")
+        return
+    top = ranking[0]
+    with st.container(border=True):
+        st.markdown("### 🏆 現在1位")
+        c1, c2 = st.columns([2, 1])
+        c1.markdown(f"## {top['名前']}")
+        c2.metric("合計点", f"{top['合計点']:+d}")
+    others = ranking[1:4]
+    if others:
+        st.markdown("#### 2位〜4位")
+        for row in others:
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([0.7, 2.0, 1.1])
+                c1.markdown(f"**{row['順位']}位**")
+                c2.markdown(f"**{row['名前']}**")
+                c3.markdown(f"**{row['合計点']:+d}**")
+
+
 # =========================
 # 画面設定・CSS
 # =========================
@@ -640,178 +713,26 @@ st.set_page_config(page_title="麻雀スコア管理", page_icon="🀄", layout=
 st.markdown(
     """
     <style>
-    html, body, [class*="css"] {
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-
-    .block-container {
-        padding-top: 1.1rem;
-        padding-bottom: 2rem;
-        max-width: 760px;
-    }
-
-    h1 {
-        font-size: 2.2rem !important;
-        margin-bottom: .8rem !important;
-        font-weight: 800 !important;
-    }
-
-    h2, h3 {
-        margin-top: 1rem !important;
-        font-weight: 800 !important;
-    }
-
-    .stButton > button {
-        border-radius: 12px;
-        border: 1px solid #d1d5db;
-        background: #ffffff;
-        color: #111827;
-        font-weight: 700;
-        transition: 0.15s;
-    }
-
-    .stButton > button:hover {
-        border-color: #ff4b4b;
-        color: #ff4b4b;
-    }
-
-    .stButton > button[kind="primary"] {
-        background: #ff4b4b;
-        color: white;
-        border-color: #ff4b4b;
-        min-height: 54px;
-        font-size: 1.05rem;
-        border-radius: 16px;
-    }
-
-    div[data-testid="column"] .stButton > button[kind="secondary"] {
-        min-height: 84px;
-        white-space: pre-line;
-    }
-
-    div[data-testid="stVerticalBlockBorderWrapper"] {
-        border-radius: 16px !important;
-        border-color: #e5e7eb !important;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.03);
-    }
-
-    .member-id-label {
-        color: #6b7280;
-        font-size: 0.82rem;
-        line-height: 1.1;
-        margin-bottom: 0.18rem;
-    }
-
-    .member-name-label {
-        color: #111827;
-        font-size: 1.25rem;
-        font-weight: 800;
-        line-height: 1.15;
-        word-break: keep-all;
-        overflow-wrap: anywhere;
-    }
-
-    .button-spacer {
-        height: 1.25rem;
-    }
-
-    .inline-panel {
-        margin-top: .5rem;
-        margin-bottom: .2rem;
-        color: #6b7280;
-        font-size: .85rem;
-        font-weight: 700;
-    }
-
-    div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button {
-        min-height: 40px !important;
-        height: 40px !important;
-        padding: 0 .25rem !important;
-        font-size: .9rem !important;
-        border-radius: 10px !important;
-        white-space: nowrap !important;
-    }
-
-    div[data-testid="stVerticalBlockBorderWrapper"] input {
-        min-height: 40px !important;
-        height: 40px !important;
-        border-radius: 10px !important;
-    }
-
-    /* ボタン色 */
-    button[kind="secondary"][aria-label="非表示"] {
-        border-color: #2563eb !important;
-        color: #2563eb !important;
-    }
-    button[kind="secondary"][aria-label="削除"] {
-        border-color: #ef4444 !important;
-        color: #ef4444 !important;
-    }
-
-    /* 対戦スタート画面 */
-    .score-card {
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: 10px 12px;
-        margin-bottom: 8px;
-    }
-    .score-order {
-        color: #6b7280;
-        font-size: .82rem;
-        font-weight: 700;
-        margin-bottom: 2px;
-    }
-    .score-name {
-        font-size: 1.15rem;
-        font-weight: 800;
-        color: #111827;
-    }
-
-    .top-rank-name {
-        font-size: 1.75rem;
-        font-weight: 900;
-        color: #111827;
-        line-height: 1.15;
-        margin-top: .2rem;
-    }
-
-    .top-rank-point {
-        font-size: 2.1rem;
-        font-weight: 900;
-        color: #ff4b4b;
-        line-height: 1.15;
-        margin-top: .35rem;
-    }
-
-    .sub-rank-no {
-        font-size: .95rem;
-        font-weight: 800;
-        color: #6b7280;
-        padding-top: .25rem;
-    }
-
-    .sub-rank-name {
-        font-size: 1.05rem;
-        font-weight: 800;
-        color: #111827;
-        padding-top: .2rem;
-    }
-
-    .sub-rank-point {
-        font-size: 1.05rem;
-        font-weight: 900;
-        color: #374151;
-        text-align: right;
-        padding-top: .2rem;
-    }
-
+    html, body, [class*="css"] { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .block-container { padding-top: 1.1rem; padding-bottom: 2rem; max-width: 760px; }
+    h1 { font-size: 2.2rem !important; margin-bottom: .8rem !important; font-weight: 800 !important; }
+    h2, h3 { margin-top: 1rem !important; font-weight: 800 !important; }
+    .stButton > button { border-radius: 12px; border: 1px solid #d1d5db; background: #ffffff; color: #111827; font-weight: 700; transition: 0.15s; }
+    .stButton > button:hover { border-color: #ff4b4b; color: #ff4b4b; }
+    .stButton > button[kind="primary"] { background: #ff4b4b; color: white; border-color: #ff4b4b; min-height: 54px; font-size: 1.05rem; border-radius: 16px; }
+    div[data-testid="column"] .stButton > button[kind="secondary"] { min-height: 84px; white-space: pre-line; }
+    div[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 16px !important; border-color: #e5e7eb !important; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+    .member-id-label { color: #6b7280; font-size: 0.82rem; line-height: 1.1; margin-bottom: 0.18rem; }
+    .member-name-label { color: #111827; font-size: 1.25rem; font-weight: 800; line-height: 1.15; word-break: keep-all; overflow-wrap: anywhere; }
+    .button-spacer { height: 1.25rem; }
+    .inline-panel { margin-top: .5rem; margin-bottom: .2rem; color: #6b7280; font-size: .85rem; font-weight: 700; }
+    div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button { min-height: 40px !important; height: 40px !important; padding: 0 .25rem !important; font-size: .9rem !important; border-radius: 10px !important; white-space: nowrap !important; }
+    div[data-testid="stVerticalBlockBorderWrapper"] input { min-height: 40px !important; height: 40px !important; border-radius: 10px !important; }
+    .score-card { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 10px 12px; margin-bottom: 8px; }
+    .score-order { color: #6b7280; font-size: .82rem; font-weight: 700; margin-bottom: 2px; }
+    .score-name { font-size: 1.15rem; font-weight: 800; color: #111827; }
     @media (max-width: 640px) {
-        .block-container {
-            padding-left: .85rem;
-            padding-right: .85rem;
-            max-width: 100% !important;
-        }
+        .block-container { padding-left: .85rem; padding-right: .85rem; max-width: 100% !important; }
         h1 { font-size: 1.75rem !important; }
         h2, h3 { font-size: 1.35rem !important; }
         div[data-testid="column"] .stButton > button[kind="secondary"] { min-height: 64px; }
@@ -819,25 +740,10 @@ st.markdown(
         .member-name-label { font-size: 1.05rem; }
         .button-spacer { height: 1.05rem; }
         div[data-testid="stVerticalBlockBorderWrapper"] { padding: .15rem !important; }
-        div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button {
-            min-height: 34px !important;
-            height: 34px !important;
-            padding: 0 .12rem !important;
-            font-size: .72rem !important;
-            border-radius: 8px !important;
-        }
-        div[data-testid="stVerticalBlockBorderWrapper"] input {
-            min-height: 36px !important;
-            height: 36px !important;
-            font-size: .9rem !important;
-        }
+        div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button { min-height: 34px !important; height: 34px !important; padding: 0 .12rem !important; font-size: .72rem !important; border-radius: 8px !important; }
+        div[data-testid="stVerticalBlockBorderWrapper"] input { min-height: 36px !important; height: 36px !important; font-size: .9rem !important; }
         .score-name { font-size: 1.05rem; }
         .score-order { font-size: .76rem; }
-        .top-rank-name { font-size: 1.45rem; }
-        .top-rank-point { font-size: 1.8rem; }
-        .sub-rank-no { font-size: .82rem; }
-        .sub-rank-name { font-size: .95rem; }
-        .sub-rank-point { font-size: .95rem; }
     }
     </style>
     """,
@@ -879,6 +785,10 @@ if "delete_game_confirm_id" not in st.session_state:
     st.session_state.delete_game_confirm_id = None
 if "selected_player_ids" not in st.session_state:
     st.session_state.selected_player_ids = []
+if "setup_session_player_ids" not in st.session_state:
+    st.session_state.setup_session_player_ids = []
+if "current_session_id" not in st.session_state:
+    st.session_state.current_session_id = None
 if "save_complete" not in st.session_state:
     st.session_state.save_complete = False
 
@@ -895,43 +805,15 @@ if st.session_state.page == "home":
     st.title("🀄 麻雀スコア管理")
     st.caption("メニューを選択してください。")
 
-    results = get_results()
+    all_results = get_results()
     players = get_players()
-    metrics = build_dashboard_metrics(results, players)
+    metrics = build_dashboard_metrics(all_results, players)
 
     c1, c2 = st.columns(2)
     c1.metric("総対戦数", f"{metrics['総対戦数']}戦")
     c2.metric("登録メンバー", f"{metrics['登録メンバー']}人")
 
-    top4 = metrics.get("上位4名", [])
-
-    if top4:
-        top = top4[0]
-        with st.container(border=True):
-            st.markdown("### 🏆 現在1位")
-            st.markdown(
-                f"""
-                <div class="top-rank-name">{top['名前']}</div>
-                <div class="top-rank-point">{top['合計点']:+d} 点</div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        if len(top4) >= 2:
-            st.markdown("#### 2位〜4位")
-            for row in top4[1:4]:
-                with st.container(border=True):
-                    rank_col, name_col, point_col = st.columns([0.55, 2.4, 1.05], gap="small")
-                    with rank_col:
-                        st.markdown(f"<div class='sub-rank-no'>{row['順位']}位</div>", unsafe_allow_html=True)
-                    with name_col:
-                        st.markdown(f"<div class='sub-rank-name'>{row['名前']}</div>", unsafe_allow_html=True)
-                    with point_col:
-                        st.markdown(f"<div class='sub-rank-point'>{row['合計点']:+d}</div>", unsafe_allow_html=True)
-    else:
-        with st.container(border=True):
-            st.markdown("### 🏆 現在1位")
-            st.write("まだランキングデータがありません。")
+    render_ranking_cards(metrics["ランキング"])
 
     with st.container(border=True):
         st.markdown("**直近の対戦**")
@@ -1088,18 +970,16 @@ elif st.session_state.page == "players":
 
 
 # =========================
-# 対戦スタート
+# 対戦スタート（対戦会方式）
 # =========================
 elif st.session_state.page == "start":
     st.title("🎮 対戦スタート")
     back_button()
 
     if st.session_state.get("save_complete", False):
-        st.session_state.selected_player_ids = []
         for key in list(st.session_state.keys()):
             if str(key).startswith("manual_point_"):
                 del st.session_state[key]
-
         st.success("正常に登録されました。")
         st.info("下のボタンを押すと、点数一覧へ移動します。")
         if st.button("点数一覧を確認する", type="primary", use_container_width=True):
@@ -1107,58 +987,132 @@ elif st.session_state.page == "start":
             go("score_list")
         st.stop()
 
+    active_sessions = get_sessions(include_finished=False)
     players = get_players()
-    if len(players) < 4:
-        st.warning("先に4人以上の名前を登録してください。")
+
+    if st.session_state.current_session_id is None:
+        st.subheader("対戦会を開始・再開")
+        if active_sessions:
+            st.markdown("### 進行中の対戦会")
+            for s in active_sessions:
+                with st.container(border=True):
+                    c1, c2 = st.columns([3, 1])
+                    with c1:
+                        st.markdown(f"**{s.get('session_date')}　{s.get('title')}**")
+                        st.caption(f"現在 {get_session_game_count(s['id'])} 戦")
+                    with c2:
+                        if st.button("再開", key=f"resume_session_{s['id']}", use_container_width=True):
+                            st.session_state.current_session_id = s["id"]
+                            st.session_state.selected_player_ids = []
+                            st.rerun()
+
+        st.markdown("---")
+        st.subheader("新しい対戦会を作成")
+        session_date = st.date_input("日付", value=date.today())
+        title = st.text_input("対戦名", value=f"{session_date.strftime('%Y/%m/%d')} 麻雀")
+
+        if len(players) < 4:
+            st.warning("先に4人以上の名前を登録してください。")
+        else:
+            st.caption("今日参加するメンバーを全員選んでください。例：15人、9人など。")
+            valid_ids = {p["id"] for p in players}
+            st.session_state.setup_session_player_ids = [pid for pid in st.session_state.setup_session_player_ids if pid in valid_ids]
+            st.info(f"現在 {len(st.session_state.setup_session_player_ids)} 人 選択中")
+
+            for p in players:
+                pid = p["id"]
+                is_selected = pid in st.session_state.setup_session_player_ids
+                with st.container(border=True):
+                    c1, c2 = st.columns([3, 1])
+                    with c1:
+                        st.markdown(f"**{p['name']}**")
+                        st.caption(f"ID:{pid}")
+                    with c2:
+                        if is_selected:
+                            if st.button("解除", key=f"setup_unselect_{pid}", use_container_width=True):
+                                st.session_state.setup_session_player_ids.remove(pid)
+                                st.rerun()
+                        else:
+                            if st.button("参加", key=f"setup_select_{pid}", use_container_width=True):
+                                st.session_state.setup_session_player_ids.append(pid)
+                                st.rerun()
+
+            if st.button("このメンバーで対戦会を開始", type="primary", use_container_width=True):
+                if len(st.session_state.setup_session_player_ids) < 4:
+                    st.warning("参加者は4人以上必要です。")
+                else:
+                    sid = create_session(title, session_date, st.session_state.setup_session_player_ids)
+                    if sid:
+                        st.session_state.current_session_id = sid
+                        st.session_state.setup_session_player_ids = []
+                        st.session_state.selected_player_ids = []
+                        st.success("対戦会を開始しました。")
+                        st.rerun()
+                    else:
+                        st.error("対戦会の作成に失敗しました。")
+
     else:
-        st.subheader("参加者を4人選択")
-        st.caption("名前の横のボタンを押すだけで選択・解除できます。4人まで選択できます。")
+        session_id = st.session_state.current_session_id
+        session = get_session(session_id)
+        if not session:
+            st.session_state.current_session_id = None
+            st.warning("対戦会が見つかりませんでした。")
+            st.rerun()
 
-        id_to_player = {p["id"]: p for p in players}
+        session_players = get_session_players(session_id)
+        session_results = get_results(session_id=session_id)
+        session_ranking = make_enhanced_ranking(session_results)
 
-        # 非表示などで存在しなくなったIDは選択状態から外す
-        valid_ids = {p["id"] for p in players}
-        st.session_state.selected_player_ids = [
-            pid for pid in st.session_state.selected_player_ids if pid in valid_ids
-        ]
+        st.subheader(f"{session.get('session_date')}　{session.get('title')}")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("参加者", f"{len(session_players)}人")
+        c2.metric("対戦数", f"{get_session_game_count(session_id)}戦")
+        c3.metric("状態", "進行中" if session.get("status") == "active" else "終了")
 
+        if session_ranking:
+            render_ranking_cards(session_ranking)
+
+        col_finish, col_leave = st.columns(2)
+        with col_finish:
+            if st.button("点数計算して対戦会を終了", type="primary", use_container_width=True):
+                update_session_status(session_id, "finished")
+                st.success("対戦会を終了しました。下に最終結果を表示しています。")
+                st.rerun()
+        with col_leave:
+            if st.button("対戦会選択へ戻る", use_container_width=True):
+                st.session_state.current_session_id = None
+                st.session_state.selected_player_ids = []
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("半荘を登録")
+
+        id_to_player = {p["id"]: p for p in session_players}
+        valid_ids = {p["id"] for p in session_players}
+        st.session_state.selected_player_ids = [pid for pid in st.session_state.selected_player_ids if pid in valid_ids]
         selected_ids = st.session_state.selected_player_ids
         st.info(f"現在 {len(selected_ids)} / 4人 選択中")
-
         if selected_ids:
-            selected_names_text = " / ".join([id_to_player[pid]["name"] for pid in selected_ids])
-            st.success(f"選択中：{selected_names_text}")
+            st.success("選択中：" + " / ".join([id_to_player[pid]["name"] for pid in selected_ids]))
 
         reset_col, _ = st.columns([1.2, 3.8])
         with reset_col:
             if st.button("選択リセット", use_container_width=True):
                 st.session_state.selected_player_ids = []
-                for p in players:
+                for p in session_players:
                     key = f"manual_point_{p['id']}"
                     if key in st.session_state:
                         st.session_state[key] = 0
                 st.rerun()
 
-        st.markdown("#### メンバー一覧")
-
-        # 1行ずつカード表示。スマホでも反応が安定するようにmultiselectは使わない
-        for p in players:
+        for p in session_players:
             pid = p["id"]
             is_selected = pid in st.session_state.selected_player_ids
-
             with st.container(border=True):
                 name_col, btn_col = st.columns([3.2, 1.0], gap="small")
                 with name_col:
-                    order_text = ""
-                    if is_selected:
-                        order_text = f"　{st.session_state.selected_player_ids.index(pid) + 1}人目"
-                    st.markdown(
-                        f"""
-                        <div class="member-id-label">ID: {pid}{order_text}</div>
-                        <div class="member-name-label">{p['name']}</div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
+                    order_text = f"　{selected_ids.index(pid) + 1}人目" if is_selected else ""
+                    st.markdown(f'<div class="member-id-label">ID: {pid}{order_text}</div><div class="member-name-label">{p["name"]}</div>', unsafe_allow_html=True)
                 with btn_col:
                     st.markdown('<div class="button-spacer"></div>', unsafe_allow_html=True)
                     if is_selected:
@@ -1174,59 +1128,35 @@ elif st.session_state.page == "start":
                             st.session_state.selected_player_ids.append(pid)
                             st.rerun()
 
-        selected_ids = st.session_state.selected_player_ids
-
-        if len(selected_ids) != 4:
+        if len(st.session_state.selected_player_ids) != 4:
             st.info("4人選択すると、半荘結果を入力できます。")
         else:
-            selected_players = [id_to_player[pid] for pid in selected_ids]
+            selected_players = [id_to_player[pid] for pid in st.session_state.selected_player_ids]
             st.markdown("---")
-            st.subheader("半荘結果を入力")
+            st.subheader(f"{get_next_game_no(session_id)}回戦の結果を入力")
             st.caption("全員手入力できます。点数は1刻みです。最後に入力する人は『集計』ボタンで合計0になる値を自動入力できます。")
 
-            points = {}
             for i, player in enumerate(selected_players, start=1):
                 with st.container(border=True):
                     name_col, score_col, auto_col = st.columns([2.0, 1.35, 0.9], gap="small")
                     with name_col:
-                        st.markdown(
-                            f"""
-                            <div class="score-order">{i}人目</div>
-                            <div class="score-name">{player['name']}</div>
-                            """,
-                            unsafe_allow_html=True,
-                        )
+                        st.markdown(f'<div class="score-order">{i}人目</div><div class="score-name">{player["name"]}</div>', unsafe_allow_html=True)
                     with score_col:
                         key = f"manual_point_{player['id']}"
                         if key not in st.session_state:
                             st.session_state[key] = 0
-                        value = st.number_input(
-                            "点数",
-                            value=int(st.session_state[key]),
-                            step=1,
-                            key=key,
-                            label_visibility="collapsed",
-                        )
-                        points[player["id"]] = int(value)
+                        st.number_input("点数", value=int(st.session_state[key]), step=1, key=key, label_visibility="collapsed")
                     with auto_col:
                         st.markdown('<div class="button-spacer"></div>', unsafe_allow_html=True)
-                        st.button(
-                            "集計",
-                            key=f"zero_fill_{player['id']}",
-                            use_container_width=True,
-                            on_click=zero_fill_point,
-                            args=(player["id"], selected_players),
-                        )
+                        st.button("集計", key=f"zero_fill_{player['id']}", use_container_width=True, on_click=zero_fill_point, args=(player["id"], selected_players))
 
             total = sum(int(st.session_state.get(f"manual_point_{p['id']}", 0)) for p in selected_players)
-
             if total == 0:
                 st.success("合計は0です。登録できます。")
             else:
                 st.error(f"合計が {total} です。±0になっていないため登録できません。")
 
-            memo = st.text_input("メモ", placeholder="例：6/7 1回目、休日麻雀 など")
-
+            memo = st.text_input("メモ", placeholder="例：1回目、南場で逆転 など")
             st.subheader("登録前確認")
             preview = []
             final_points = {}
@@ -1241,7 +1171,7 @@ elif st.session_state.page == "start":
                 if total != 0:
                     st.error("合計が±0になっていないため登録できません。")
                 else:
-                    ok = save_game(final_points, memo)
+                    ok = save_game(final_points, memo, session_id=session_id)
                     if ok:
                         st.session_state.save_complete = True
                         st.rerun()
@@ -1255,7 +1185,9 @@ elif st.session_state.page == "start":
 elif st.session_state.page == "score_list":
     st.title("📋 点数一覧")
     back_button()
-    results = get_results()
+
+    selected_session_id = select_result_scope()
+    results = get_results(session_id=selected_session_id)
     table = make_score_table(results)
 
     if table:
@@ -1273,11 +1205,7 @@ elif st.session_state.page == "score_list":
             selected_game = options[selected_label]
 
             st.markdown("**選択中の対戦**")
-            st.table([
-                {"名前": m["name"], "点数": m["point"]}
-                for m in selected_game["members"]
-            ])
-
+            st.table([{"名前": m["name"], "点数": m["point"]} for m in selected_game["members"]])
             if selected_game.get("memo"):
                 st.write(f"メモ：{selected_game['memo']}")
 
@@ -1311,14 +1239,11 @@ elif st.session_state.page == "score_list":
 elif st.session_state.page == "ranking":
     st.title("🏆 ランキング")
     back_button()
-    results = get_results()
+    selected_session_id = select_result_scope()
+    results = get_results(session_id=selected_session_id)
     table = make_enhanced_ranking(results)
     if table:
-        top = table[0]
-        c1, c2, c3 = st.columns(3)
-        c1.metric("現在1位", top["名前"])
-        c2.metric("1位合計点", f"{top['合計点']:+d}")
-        c3.metric("平均点", top["平均点"])
+        render_ranking_cards(table)
         st.markdown("---")
         st.subheader("総合ランキング")
         st.table(table)
@@ -1332,7 +1257,8 @@ elif st.session_state.page == "ranking":
 elif st.session_state.page == "personal":
     st.title("👤 個人成績")
     back_button()
-    results = get_results()
+    selected_session_id = select_result_scope()
+    results = get_results(session_id=selected_session_id)
     names = sorted(set(r["name"] for r in results if r["name"]))
     if not names:
         st.info("まだデータがありません。")
@@ -1354,12 +1280,10 @@ elif st.session_state.page == "personal":
             c1.metric("対戦数", count)
             c2.metric("合計点", f"{total:+d}")
             c3.metric("平均点", f"{avg:.1f}")
-
             c4, c5, c6 = st.columns(3)
             c4.metric("平均順位", f"{avg_rank:.2f}")
             c5.metric("トップ率", f"{top_rate:.1f}%")
             c6.metric("ラス率", f"{last_rate:.1f}%")
-
             c7, c8, c9 = st.columns(3)
             c7.metric("プラス率", f"{plus_rate:.1f}%")
             c8.metric("最高点", f"{stat['最高点']:+d}")
@@ -1367,21 +1291,11 @@ elif st.session_state.page == "personal":
 
             st.markdown("---")
             st.subheader("順位内訳")
-            rank_table = [{
-                "トップ": stat["トップ回数"],
-                "2着": stat["2着回数"],
-                "3着": stat["3着回数"],
-                "ラス": stat["ラス回数"],
-            }]
-            st.table(rank_table)
-
+            st.table([{"トップ": stat["トップ回数"], "2着": stat["2着回数"], "3着": stat["3着回数"], "ラス": stat["ラス回数"]}])
             st.subheader("累計推移")
-            # Streamlit側で簡易グラフ化
             st.line_chart({"累計": [r["累計"] for r in personal_rows]})
-
             st.subheader("直近10戦")
-            recent = list(reversed(personal_rows[-10:]))
-            st.table(recent)
+            st.table(list(reversed(personal_rows[-10:])))
 
 
 # =========================
@@ -1390,7 +1304,28 @@ elif st.session_state.page == "personal":
 elif st.session_state.page == "history":
     st.title("🕘 過去の対戦履歴")
     back_button()
-    results = get_results()
+
+    sessions = get_sessions(include_finished=True)
+    if sessions:
+        st.subheader("対戦会一覧")
+        rows = []
+        for s in sessions:
+            sid = s["id"]
+            session_results = get_results(session_id=sid)
+            ranking = make_enhanced_ranking(session_results)
+            top_text = f"{ranking[0]['名前']} {ranking[0]['合計点']:+d}" if ranking else "-"
+            rows.append({
+                "日付": s.get("session_date"),
+                "対戦名": s.get("title"),
+                "状態": "進行中" if s.get("status") == "active" else "終了",
+                "対戦数": get_session_game_count(sid),
+                "1位": top_text,
+            })
+        st.table(rows)
+
+    st.markdown("---")
+    selected_session_id = select_result_scope()
+    results = get_results(session_id=selected_session_id)
     history = make_history_table(results)
     if not history:
         st.info("まだ履歴がありません。")
@@ -1399,12 +1334,13 @@ elif st.session_state.page == "history":
 
 
 # =========================
-# 後で追加
+# 相性分析
 # =========================
 elif st.session_state.page == "matchup":
     st.title("🤝 相性分析")
     back_button()
-    results = get_results()
+    selected_session_id = select_result_scope()
+    results = get_results(session_id=selected_session_id)
     names = sorted(set(r["name"] for r in results if r["name"]))
     if not names:
         st.info("まだデータがありません。")
@@ -1423,6 +1359,9 @@ elif st.session_state.page == "matchup":
             st.info("この人の同卓データがまだありません。")
 
 
+# =========================
+# 設定
+# =========================
 elif st.session_state.page == "settings":
     st.title("⚙️ 設定")
     back_button()
@@ -1482,7 +1421,7 @@ elif st.session_state.page == "settings":
                 st.session_state.clear_scores_step = 0
                 if ok:
                     for key in list(st.session_state.keys()):
-                        if key.startswith("score_input_") or key in ["selected_player_ids", "save_complete"]:
+                        if key.startswith("manual_point_") or key in ["selected_player_ids", "save_complete", "current_session_id", "setup_session_player_ids"]:
                             del st.session_state[key]
                     st.success(msg)
                     st.rerun()
