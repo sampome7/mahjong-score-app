@@ -2,6 +2,10 @@ import streamlit as st
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from io import BytesIO
+
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # =========================
 # Supabase設定
@@ -311,6 +315,297 @@ def make_ranking(results):
     return table
 
 
+def group_results_by_game(results):
+    games = {}
+    for row in results:
+        game_id = row.get("game_id")
+        if game_id is None:
+            continue
+        if game_id not in games:
+            games[game_id] = {
+                "game_id": game_id,
+                "game_no": row.get("game_no"),
+                "memo": row.get("memo") or "",
+                "played_at": row.get("played_at") or "",
+                "members": [],
+            }
+        games[game_id]["members"].append({
+            "player_id": row.get("player_id"),
+            "name": row.get("name") or "",
+            "point": int(row.get("point") or 0),
+        })
+    return games
+
+
+def add_rank_to_games(games):
+    for game in games.values():
+        members = sorted(game["members"], key=lambda x: x["point"], reverse=True)
+        prev_point = None
+        current_rank = 0
+        for idx, member in enumerate(members, start=1):
+            if prev_point is None or member["point"] != prev_point:
+                current_rank = idx
+            member["rank"] = current_rank
+            prev_point = member["point"]
+        game["members"] = members
+    return games
+
+
+def build_player_stats(results):
+    games = add_rank_to_games(group_results_by_game(results))
+    stats = {}
+    for game in games.values():
+        member_count = len(game["members"])
+        for member in game["members"]:
+            pid = member["player_id"]
+            name = member["name"]
+            point = int(member["point"])
+            rank = int(member.get("rank") or 0)
+            if pid not in stats:
+                stats[pid] = {
+                    "player_id": pid,
+                    "名前": name,
+                    "対戦数": 0,
+                    "トップ回数": 0,
+                    "2着回数": 0,
+                    "3着回数": 0,
+                    "ラス回数": 0,
+                    "プラス回数": 0,
+                    "マイナス回数": 0,
+                    "順位合計": 0,
+                    "合計点": 0,
+                    "最高点": point,
+                    "最低点": point,
+                }
+            s = stats[pid]
+            s["名前"] = name
+            s["対戦数"] += 1
+            s["合計点"] += point
+            s["順位合計"] += rank
+            s["最高点"] = max(s["最高点"], point)
+            s["最低点"] = min(s["最低点"], point)
+            if point > 0:
+                s["プラス回数"] += 1
+            elif point < 0:
+                s["マイナス回数"] += 1
+            if rank == 1:
+                s["トップ回数"] += 1
+            elif rank == 2:
+                s["2着回数"] += 1
+            elif rank == 3:
+                s["3着回数"] += 1
+            if rank == member_count:
+                s["ラス回数"] += 1
+    return stats, games
+
+
+def make_enhanced_ranking(results):
+    stats, _ = build_player_stats(results)
+    table = []
+    for data in stats.values():
+        count = data["対戦数"]
+        avg = data["合計点"] / count if count else 0
+        avg_rank = data["順位合計"] / count if count else 0
+        plus_rate = data["プラス回数"] / count * 100 if count else 0
+        top_rate = data["トップ回数"] / count * 100 if count else 0
+        last_rate = data["ラス回数"] / count * 100 if count else 0
+        table.append({
+            "順位": 0,
+            "名前": data["名前"],
+            "対戦数": count,
+            "合計点": data["合計点"],
+            "平均点": round(avg, 1),
+            "平均順位": round(avg_rank, 2),
+            "プラス率": f"{plus_rate:.1f}%",
+            "トップ回数": data["トップ回数"],
+            "トップ率": f"{top_rate:.1f}%",
+            "ラス回数": data["ラス回数"],
+            "ラス率": f"{last_rate:.1f}%",
+            "最高点": data["最高点"],
+            "最低点": data["最低点"],
+        })
+    table.sort(key=lambda x: (x["合計点"], x["平均点"]), reverse=True)
+    for i, row in enumerate(table, start=1):
+        row["順位"] = i
+    return table
+
+
+def make_personal_detail(results, target_name):
+    stats, games = build_player_stats(results)
+    personal_rows = []
+    cumulative = 0
+    for game in sorted(games.values(), key=lambda g: g.get("game_no") or 0):
+        members = game["members"]
+        target = next((m for m in members if m["name"] == target_name), None)
+        if not target:
+            continue
+        cumulative += int(target["point"])
+        personal_rows.append({
+            "回戦": game.get("game_no"),
+            "順位": target.get("rank"),
+            "点数": int(target["point"]),
+            "累計": cumulative,
+            "メモ": game.get("memo") or "",
+        })
+    if not personal_rows:
+        return None, [], []
+    player_stat = None
+    for s in stats.values():
+        if s["名前"] == target_name:
+            player_stat = s
+            break
+    chart_data = [{"回戦": r["回戦"], "累計": r["累計"]} for r in personal_rows]
+    return player_stat, personal_rows, chart_data
+
+
+def make_matchup_table(results, target_name):
+    _, games = build_player_stats(results)
+    matchup = {}
+    for game in games.values():
+        members = game["members"]
+        me = next((m for m in members if m["name"] == target_name), None)
+        if not me:
+            continue
+        for opp in members:
+            if opp["name"] == target_name:
+                continue
+            name = opp["name"]
+            if name not in matchup:
+                matchup[name] = {
+                    "相手": name,
+                    "同卓回数": 0,
+                    "自分合計": 0,
+                    "相手合計": 0,
+                    "勝ち回数": 0,
+                    "負け回数": 0,
+                    "自分順位合計": 0,
+                    "相手順位合計": 0,
+                }
+            m = matchup[name]
+            m["同卓回数"] += 1
+            m["自分合計"] += int(me["point"])
+            m["相手合計"] += int(opp["point"])
+            m["自分順位合計"] += int(me.get("rank") or 0)
+            m["相手順位合計"] += int(opp.get("rank") or 0)
+            if int(me["point"]) > int(opp["point"]):
+                m["勝ち回数"] += 1
+            elif int(me["point"]) < int(opp["point"]):
+                m["負け回数"] += 1
+
+    table = []
+    for m in matchup.values():
+        count = m["同卓回数"]
+        win_rate = m["勝ち回数"] / count * 100 if count else 0
+        table.append({
+            "相手": m["相手"],
+            "同卓回数": count,
+            "自分合計": m["自分合計"],
+            "相手合計": m["相手合計"],
+            "差分": m["自分合計"] - m["相手合計"],
+            "自分平均": round(m["自分合計"] / count, 1) if count else 0,
+            "相手平均": round(m["相手合計"] / count, 1) if count else 0,
+            "勝ち回数": m["勝ち回数"],
+            "勝率": f"{win_rate:.1f}%",
+            "自分平均順位": round(m["自分順位合計"] / count, 2) if count else 0,
+            "相手平均順位": round(m["相手順位合計"] / count, 2) if count else 0,
+        })
+    table.sort(key=lambda x: (x["差分"], x["同卓回数"]), reverse=True)
+    return table
+
+
+def make_history_table(results):
+    games = add_rank_to_games(group_results_by_game(results))
+    history = []
+    for game in sorted(games.values(), key=lambda g: g.get("game_no") or 0, reverse=True):
+        for m in game["members"]:
+            history.append({
+                "回戦": game.get("game_no"),
+                "順位": m.get("rank"),
+                "名前": m.get("name"),
+                "点数": m.get("point"),
+                "メモ": game.get("memo") or "",
+            })
+    return history
+
+
+def build_dashboard_metrics(results, players):
+    ranking = make_enhanced_ranking(results)
+    game_count = len(group_results_by_game(results))
+    active_count = len(players)
+    top_name = ranking[0]["名前"] if ranking else "-"
+    top_point = ranking[0]["合計点"] if ranking else 0
+    recent_game = make_game_summary(results)
+    recent_label = recent_game[0]["label"] if recent_game else "まだ対戦がありません"
+    return {
+        "総対戦数": game_count,
+        "登録メンバー": active_count,
+        "現在1位": top_name,
+        "1位合計点": top_point,
+        "直近対戦": recent_label,
+    }
+
+
+def make_excel_file(results):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "点数一覧"
+
+    sheets = {
+        "点数一覧": make_score_table(results),
+        "ランキング": make_enhanced_ranking(results),
+        "対戦履歴": make_history_table(results),
+    }
+
+    # 個人成績サマリー
+    personal_summary = []
+    ranking = make_enhanced_ranking(results)
+    for r in ranking:
+        personal_summary.append(r.copy())
+    sheets["個人成績"] = personal_summary
+
+    header_fill = PatternFill("solid", fgColor="1F4E79")
+    header_font = Font(color="FFFFFF", bold=True)
+    border = Border(
+        left=Side(style="thin", color="D9E2F3"),
+        right=Side(style="thin", color="D9E2F3"),
+        top=Side(style="thin", color="D9E2F3"),
+        bottom=Side(style="thin", color="D9E2F3"),
+    )
+
+    first = True
+    for sheet_name, rows in sheets.items():
+        if first:
+            ws = wb.active
+            ws.title = sheet_name
+            first = False
+        else:
+            ws = wb.create_sheet(sheet_name)
+        if not rows:
+            ws.append(["データなし"])
+            continue
+        headers = list(rows[0].keys())
+        ws.append(headers)
+        for row in rows:
+            ws.append([row.get(h, "") for h in headers])
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.border = border
+        for col in ws.columns:
+            max_len = max(len(str(cell.value)) if cell.value is not None else 0 for cell in col)
+            ws.column_dimensions[col[0].column_letter].width = min(max(max_len + 2, 10), 28)
+        ws.freeze_panes = "A2"
+
+    bio = BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio.getvalue()
+
+
+
 # =========================
 # UI部品
 # =========================
@@ -552,6 +847,24 @@ def go(page):
 if st.session_state.page == "home":
     st.title("🀄 麻雀スコア管理")
     st.caption("メニューを選択してください。")
+
+    results = get_results()
+    players = get_players()
+    metrics = build_dashboard_metrics(results, players)
+
+    c1, c2 = st.columns(2)
+    c1.metric("総対戦数", f"{metrics['総対戦数']}戦")
+    c2.metric("登録メンバー", f"{metrics['登録メンバー']}人")
+
+    c3, c4 = st.columns(2)
+    c3.metric("現在1位", metrics["現在1位"])
+    c4.metric("1位合計点", f"{metrics['1位合計点']:+d}")
+
+    with st.container(border=True):
+        st.markdown("**直近の対戦**")
+        st.write(metrics["直近対戦"])
+
+    st.markdown("---")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -926,8 +1239,15 @@ elif st.session_state.page == "ranking":
     st.title("🏆 ランキング")
     back_button()
     results = get_results()
-    table = make_ranking(results)
+    table = make_enhanced_ranking(results)
     if table:
+        top = table[0]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("現在1位", top["名前"])
+        c2.metric("1位合計点", f"{top['合計点']:+d}")
+        c3.metric("平均点", top["平均点"])
+        st.markdown("---")
+        st.subheader("総合ランキング")
         st.table(table)
     else:
         st.info("まだデータがありません。")
@@ -945,17 +1265,50 @@ elif st.session_state.page == "personal":
         st.info("まだデータがありません。")
     else:
         target = st.selectbox("名前を選択", names)
-        personal = [r for r in results if r["name"] == target]
-        total = sum(int(r["point"]) for r in personal)
-        count = len(personal)
-        avg = total / count if count else 0
-        plus = len([r for r in personal if int(r["point"]) > 0])
-        c1, c2, c3 = st.columns(3)
-        c1.metric("対戦数", count)
-        c2.metric("合計点", total)
-        c3.metric("平均点", f"{avg:.1f}")
-        st.write(f"プラス回数：{plus}回")
-        st.table([{"回戦": r["game_no"], "点数": r["point"], "メモ": r["memo"] or ""} for r in personal])
+        stat, personal_rows, chart_data = make_personal_detail(results, target)
+        if not stat:
+            st.info("データがありません。")
+        else:
+            count = stat["対戦数"]
+            total = stat["合計点"]
+            avg = total / count if count else 0
+            avg_rank = stat["順位合計"] / count if count else 0
+            top_rate = stat["トップ回数"] / count * 100 if count else 0
+            last_rate = stat["ラス回数"] / count * 100 if count else 0
+            plus_rate = stat["プラス回数"] / count * 100 if count else 0
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("対戦数", count)
+            c2.metric("合計点", f"{total:+d}")
+            c3.metric("平均点", f"{avg:.1f}")
+
+            c4, c5, c6 = st.columns(3)
+            c4.metric("平均順位", f"{avg_rank:.2f}")
+            c5.metric("トップ率", f"{top_rate:.1f}%")
+            c6.metric("ラス率", f"{last_rate:.1f}%")
+
+            c7, c8, c9 = st.columns(3)
+            c7.metric("プラス率", f"{plus_rate:.1f}%")
+            c8.metric("最高点", f"{stat['最高点']:+d}")
+            c9.metric("最低点", f"{stat['最低点']:+d}")
+
+            st.markdown("---")
+            st.subheader("順位内訳")
+            rank_table = [{
+                "トップ": stat["トップ回数"],
+                "2着": stat["2着回数"],
+                "3着": stat["3着回数"],
+                "ラス": stat["ラス回数"],
+            }]
+            st.table(rank_table)
+
+            st.subheader("累計推移")
+            # Streamlit側で簡易グラフ化
+            st.line_chart({"累計": [r["累計"] for r in personal_rows]})
+
+            st.subheader("直近10戦")
+            recent = list(reversed(personal_rows[-10:]))
+            st.table(recent)
 
 
 # =========================
@@ -965,12 +1318,10 @@ elif st.session_state.page == "history":
     st.title("🕘 過去の対戦履歴")
     back_button()
     results = get_results()
-    if not results:
+    history = make_history_table(results)
+    if not history:
         st.info("まだ履歴がありません。")
     else:
-        history = []
-        for r in results:
-            history.append({"回戦": r["game_no"], "名前": r["name"], "点数": r["point"], "メモ": r["memo"] or ""})
         st.table(history)
 
 
@@ -980,12 +1331,44 @@ elif st.session_state.page == "history":
 elif st.session_state.page == "matchup":
     st.title("🤝 相性分析")
     back_button()
-    st.info("次の追加機能として作ります。")
+    results = get_results()
+    names = sorted(set(r["name"] for r in results if r["name"]))
+    if not names:
+        st.info("まだデータがありません。")
+    else:
+        target = st.selectbox("自分を選択", names)
+        table = make_matchup_table(results, target)
+        if table:
+            best = table[0]
+            worst = table[-1]
+            c1, c2 = st.columns(2)
+            c1.metric("相性が良い相手", best["相手"], f"差分 {best['差分']:+d}")
+            c2.metric("苦手な相手", worst["相手"], f"差分 {worst['差分']:+d}")
+            st.markdown("---")
+            st.table(table)
+        else:
+            st.info("この人の同卓データがまだありません。")
+
 
 elif st.session_state.page == "settings":
     st.title("⚙️ 設定")
     back_button()
 
+    st.subheader("Excel出力")
+    results_for_excel = get_results()
+    if results_for_excel:
+        excel_bytes = make_excel_file(results_for_excel)
+        st.download_button(
+            "Excelファイルをダウンロード",
+            data=excel_bytes,
+            file_name="mahjong_score_export.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    else:
+        st.info("Excel出力できるデータがまだありません。")
+
+    st.markdown("---")
     st.subheader("データ管理")
     st.warning("名前登録データは残したまま、点数一覧・ランキング・個人成績・過去の対戦履歴だけを削除します。")
 
