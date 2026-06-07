@@ -642,12 +642,28 @@ def build_dashboard_metrics(results, players):
 
 
 
-def make_point_calculation_base(results):
-    """点数計算画面用：選択範囲内の各プレイヤー累計を作る。"""
-    if not results:
-        return []
+def make_point_calculation_base(results, session_id=None):
+    """点数計算画面用：選択範囲内の各プレイヤー累計を作る。
 
+    対戦会が指定されている場合は、その対戦会の参加者全員を表示する。
+    まだ対戦していない参加者は累計0で表示する。
+    """
     rows_by_player = {}
+
+    # 対戦会指定時は、先に参加者全員を0点で作成する
+    if session_id is not None:
+        for p in get_session_players(session_id):
+            pid = p.get("id")
+            name = p.get("name") or ""
+            if pid is None or not name:
+                continue
+            rows_by_player[pid] = {
+                "player_id": pid,
+                "名前": name,
+                "累計": 0,
+            }
+
+    # 対戦結果を累計する
     for row in results:
         pid = row.get("player_id")
         name = row.get("name") or ""
@@ -878,9 +894,9 @@ if "resume_confirm_session_id" not in st.session_state:
 if "result_scope_default_session_id" not in st.session_state:
     st.session_state.result_scope_default_session_id = None
 if "point_calc_score_rate" not in st.session_state:
-    st.session_state.point_calc_score_rate = 1
+    st.session_state.point_calc_score_rate = 10
 if "point_calc_chip_rate" not in st.session_state:
-    st.session_state.point_calc_chip_rate = 1
+    st.session_state.point_calc_chip_rate = 100
 
 
 def clear_hand_selection():
@@ -910,7 +926,17 @@ if st.session_state.page == "home":
     c1.metric("総対戦数", f"{metrics['総対戦数']}戦")
     c2.metric("登録メンバー", f"{metrics['登録メンバー']}人")
 
-    render_ranking_cards(metrics["ランキング"])
+    # 進行中の対戦会が選択されている場合は、その対戦会の1位〜4位を表示。
+    # 対戦会が終了している/未設定の場合は、全期間の1位〜4位を表示。
+    current_session = get_active_current_session()
+    if current_session:
+        st.markdown(f"### 進行中の対戦会ランキング")
+        st.caption(get_session_label(current_session))
+        current_results = get_results(session_id=current_session["id"])
+        render_ranking_cards(make_enhanced_ranking(current_results))
+    else:
+        st.markdown("### 全期間ランキング")
+        render_ranking_cards(metrics["ランキング"])
 
     with st.container(border=True):
         st.markdown("**直近の対戦**")
@@ -1539,98 +1565,110 @@ elif st.session_state.page == "point_calc":
     selected_session_id = select_result_scope(results_required=False)
     results = get_results(session_id=selected_session_id)
 
-    if not results:
+    if not results and selected_session_id is None:
         st.info("選択した範囲には、まだ対戦データがありません。")
     else:
-        base_rows = make_point_calculation_base(results)
+        base_rows = make_point_calculation_base(results, session_id=selected_session_id)
 
-        st.subheader("ポイント設定")
-        rate_col1, rate_col2 = st.columns(2, gap="small")
-        with rate_col1:
-            score_rate = st.number_input(
-                "1点あたりのpt",
-                min_value=0,
-                value=int(st.session_state.get("point_calc_score_rate", 1)),
-                step=1,
-                key="point_calc_score_rate",
-            )
-        with rate_col2:
-            chip_rate = st.number_input(
-                "チップ1枚あたりのpt",
-                min_value=0,
-                value=int(st.session_state.get("point_calc_chip_rate", 1)),
-                step=1,
-                key="point_calc_chip_rate",
-            )
-
-        st.markdown("---")
-        st.subheader("計算表")
-        st.caption("チップ枚数を入力すると、右側の総合計に反映されます。")
-
-        header_cols = st.columns([1.65, 0.9, 1.0, 0.9, 1.0, 1.15], gap="small")
-        headers = ["名前", "累計", f"点数pt\n(×{score_rate})", "チップ", f"チップpt\n(×{chip_rate})", "総合計"]
-        for col, label in zip(header_cols, headers):
-            with col:
-                st.markdown(f"**{label}**")
-
-        final_rows = []
-        for row in base_rows:
-            pid = row["player_id"]
-            name = row["名前"]
-            total_score = int(row["累計"])
-            score_points = total_score * int(score_rate)
-            chip_key = f"chip_count_{selected_session_id or 'all'}_{pid}"
-            if chip_key not in st.session_state:
-                st.session_state[chip_key] = 0
-
-            c1, c2, c3, c4, c5, c6 = st.columns([1.65, 0.9, 1.0, 0.9, 1.0, 1.15], gap="small")
-            with c1:
-                st.write(name)
-            with c2:
-                st.write(f"{total_score:+d}")
-            with c3:
-                st.write(f"{score_points:+d}")
-            with c4:
-                chip_count = st.number_input(
-                    "チップ",
-                    value=int(st.session_state[chip_key]),
-                    step=1,
-                    key=chip_key,
-                    label_visibility="collapsed",
+        if not base_rows:
+            st.info("選択した範囲には、計算対象のメンバーがいません。")
+        else:
+            st.subheader("ポイント設定")
+            rate_col1, rate_col2 = st.columns(2, gap="small")
+            with rate_col1:
+                score_rate = st.number_input(
+                    "1点あたりのpt",
+                    min_value=0,
+                    value=int(st.session_state.get("point_calc_score_rate", 10)),
+                    step=10,
+                    key="point_calc_score_rate",
                 )
-            chip_points = int(chip_count) * int(chip_rate)
-            grand_total = score_points + chip_points
-            with c5:
-                st.write(f"{chip_points:+d}")
-            with c6:
-                st.write(f"**{grand_total:+d}**")
+            with rate_col2:
+                chip_rate = st.number_input(
+                    "チップ1枚あたりのpt",
+                    min_value=0,
+                    value=int(st.session_state.get("point_calc_chip_rate", 100)),
+                    step=100,
+                    key="point_calc_chip_rate",
+                )
 
-            final_rows.append({
-                "名前": name,
-                "累計": total_score,
-                f"点数pt（1点={score_rate}pt）": score_points,
-                "チップ枚数": int(chip_count),
-                f"チップpt（1枚={chip_rate}pt）": chip_points,
-                "総合計": grand_total,
-            })
+            st.markdown("---")
+            st.subheader("計算表")
+            st.caption("チップ枚数は選択した対戦会の全員分を入力してください。チップ合計が0にならない場合はエラー表示します。")
 
-        st.markdown("---")
-        st.subheader("総合計ランキング")
-        final_rows.sort(key=lambda x: x["総合計"], reverse=True)
-        for i, r in enumerate(final_rows, start=1):
-            r["順位"] = i
-        display_rows = []
-        for r in final_rows:
-            display_rows.append({
-                "順位": r["順位"],
-                "名前": r["名前"],
-                "累計": r["累計"],
-                "点数pt": r[f"点数pt（1点={score_rate}pt）"],
-                "チップ枚数": r["チップ枚数"],
-                "チップpt": r[f"チップpt（1枚={chip_rate}pt）"],
-                "総合計": r["総合計"],
-            })
-        st.table(display_rows)
+            header_cols = st.columns([1.55, 0.82, 1.05, 0.82, 1.05, 1.15], gap="small")
+            headers = ["名前", "累計", f"点数pt\n(×{score_rate})", "チップ", f"チップpt\n(×{chip_rate})", "総合計"]
+            for col, label in zip(header_cols, headers):
+                with col:
+                    st.markdown(f"**{label}**")
+
+            final_rows = []
+            chip_total = 0
+
+            for row in base_rows:
+                pid = row["player_id"]
+                name = row["名前"]
+                total_score = int(row["累計"])
+                score_points = total_score * int(score_rate)
+                chip_key = f"chip_count_{selected_session_id or 'all'}_{pid}"
+                if chip_key not in st.session_state:
+                    st.session_state[chip_key] = 0
+
+                c1, c2, c3, c4, c5, c6 = st.columns([1.55, 0.82, 1.05, 0.82, 1.05, 1.15], gap="small")
+                with c1:
+                    st.write(name)
+                with c2:
+                    st.write(f"{total_score:+d}")
+                with c3:
+                    st.write(f"{score_points:+d}")
+                with c4:
+                    chip_count = st.number_input(
+                        "チップ",
+                        value=int(st.session_state[chip_key]),
+                        step=1,
+                        key=chip_key,
+                        label_visibility="collapsed",
+                    )
+                chip_count = int(chip_count)
+                chip_total += chip_count
+                chip_points = chip_count * int(chip_rate)
+                grand_total = score_points + chip_points
+                with c5:
+                    st.write(f"{chip_points:+d}")
+                with c6:
+                    st.write(f"**{grand_total:+d}**")
+
+                final_rows.append({
+                    "名前": name,
+                    "累計": total_score,
+                    f"点数pt（1点={score_rate}pt）": score_points,
+                    "チップ枚数": chip_count,
+                    f"チップpt（1枚={chip_rate}pt）": chip_points,
+                    "総合計": grand_total,
+                })
+
+            st.markdown("---")
+            if chip_total == 0:
+                st.success("チップ枚数の合計は0です。")
+            else:
+                st.error(f"チップ枚数の合計が {chip_total:+d} です。0になるように入力してください。")
+
+            st.subheader("総合計ランキング")
+            final_rows.sort(key=lambda x: x["総合計"], reverse=True)
+            for i, r in enumerate(final_rows, start=1):
+                r["順位"] = i
+            display_rows = []
+            for r in final_rows:
+                display_rows.append({
+                    "順位": r["順位"],
+                    "名前": r["名前"],
+                    "累計": r["累計"],
+                    "点数pt": r[f"点数pt（1点={score_rate}pt）"],
+                    "チップ枚数": r["チップ枚数"],
+                    "チップpt": r[f"チップpt（1枚={chip_rate}pt）"],
+                    "総合計": r["総合計"],
+                })
+            st.table(display_rows)
 
 
 # =========================
