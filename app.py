@@ -60,6 +60,15 @@ def api_delete(table, row_id):
     return True
 
 
+def api_delete_where(table, params):
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    response = requests.delete(url, headers=HEADERS, params=params)
+    if response.status_code >= 400:
+        st.error(response.text)
+        return False
+    return True
+
+
 # =========================
 # データ操作
 # =========================
@@ -116,6 +125,20 @@ def delete_player(player_id):
     if not ok:
         return False, "削除に失敗しました。"
     return True, "削除しました。"
+
+
+def clear_score_data():
+    # 名前マスタ(players)は消さず、対戦結果だけ削除する
+    # 外部キーの関係があるため、game_results → games の順番で削除
+    ok_results = api_delete_where("game_results", {"id": "gte.0"})
+    if not ok_results:
+        return False, "点数データの削除に失敗しました。"
+
+    ok_games = api_delete_where("games", {"id": "gte.0"})
+    if not ok_games:
+        return False, "対戦履歴の削除に失敗しました。"
+
+    return True, "点数一覧・ランキング・個人成績・対戦履歴のデータを全て削除しました。"
 
 
 def get_next_game_no():
@@ -441,6 +464,8 @@ if "delete_confirm_id" not in st.session_state:
     st.session_state.delete_confirm_id = None
 if "edit_player_id" not in st.session_state:
     st.session_state.edit_player_id = None
+if "clear_scores_confirm" not in st.session_state:
+    st.session_state.clear_scores_confirm = False
 if "selected_player_ids" not in st.session_state:
     st.session_state.selected_player_ids = []
 if "save_complete" not in st.session_state:
@@ -849,4 +874,31 @@ elif st.session_state.page == "matchup":
 elif st.session_state.page == "settings":
     st.title("⚙️ 設定")
     back_button()
-    st.info("次の追加機能として作ります。")
+
+    st.subheader("データ管理")
+    st.warning("名前登録データは残したまま、点数一覧・ランキング・個人成績・過去の対戦履歴だけを削除します。")
+
+    if not st.session_state.clear_scores_confirm:
+        if st.button("点数データを全削除", type="primary", use_container_width=True):
+            st.session_state.clear_scores_confirm = True
+            st.rerun()
+    else:
+        st.error("本当に点数データを全て削除しますか？この操作は元に戻せません。")
+        yes_col, no_col = st.columns(2, gap="small")
+        with yes_col:
+            if st.button("はい、削除する", use_container_width=True):
+                ok, msg = clear_score_data()
+                st.session_state.clear_scores_confirm = False
+                if ok:
+                    # 対戦入力まわりの一時状態もリセット
+                    for key in list(st.session_state.keys()):
+                        if key.startswith("score_input_") or key in ["selected_players", "save_complete"]:
+                            del st.session_state[key]
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.warning(msg)
+        with no_col:
+            if st.button("いいえ、やめる", use_container_width=True):
+                st.session_state.clear_scores_confirm = False
+                st.rerun()
