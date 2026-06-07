@@ -142,6 +142,62 @@ def clear_score_data():
     return True, "点数一覧・ランキング・個人成績・対戦履歴のデータを全て削除しました。"
 
 
+def delete_single_game(game_id):
+    # 指定した1対戦だけ削除する。名前マスタ(players)は削除しない。
+    # 外部キーの関係があるため、game_results → games の順番で削除。
+    ok_results = api_delete_where("game_results", {"game_id": f"eq.{game_id}"})
+    if not ok_results:
+        return False, "この対戦の点数データ削除に失敗しました。"
+
+    ok_game = api_delete("games", game_id)
+    if not ok_game:
+        return False, "この対戦履歴の削除に失敗しました。"
+
+    return True, "指定した対戦を削除しました。"
+
+
+def make_game_summary(results):
+    if not results:
+        return []
+
+    games = {}
+    for row in results:
+        game_id = row.get("game_id")
+        if game_id is None:
+            continue
+        if game_id not in games:
+            games[game_id] = {
+                "game_id": game_id,
+                "game_no": row.get("game_no"),
+                "memo": row.get("memo") or "",
+                "played_at": row.get("played_at") or "",
+                "members": [],
+            }
+        games[game_id]["members"].append({
+            "name": row.get("name") or "",
+            "point": int(row.get("point") or 0),
+        })
+
+    summary = []
+    for game in games.values():
+        members_sorted = sorted(game["members"], key=lambda x: x["point"], reverse=True)
+        member_text = " / ".join([f"{m['name']} {m['point']:+d}" for m in members_sorted])
+        label = f"{game['game_no']}回戦　{member_text}"
+        if game["memo"]:
+            label += f"　メモ：{game['memo']}"
+        summary.append({
+            "game_id": game["game_id"],
+            "game_no": game["game_no"],
+            "label": label,
+            "members": members_sorted,
+            "memo": game["memo"],
+            "played_at": game["played_at"],
+        })
+
+    summary.sort(key=lambda x: x["game_no"] or 0, reverse=True)
+    return summary
+
+
 def get_game_count():
     rows = api_get("games", {"select": "id"})
     return len(rows)
@@ -477,6 +533,8 @@ if "edit_player_id" not in st.session_state:
     st.session_state.edit_player_id = None
 if "clear_scores_step" not in st.session_state:
     st.session_state.clear_scores_step = 0
+if "delete_game_confirm_id" not in st.session_state:
+    st.session_state.delete_game_confirm_id = None
 if "selected_player_ids" not in st.session_state:
     st.session_state.selected_player_ids = []
 if "save_complete" not in st.session_state:
@@ -813,8 +871,50 @@ elif st.session_state.page == "score_list":
     back_button()
     results = get_results()
     table = make_score_table(results)
+
     if table:
+        st.subheader("点数一覧")
         st.table(table)
+
+        st.markdown("---")
+        st.subheader("対戦ごとの削除")
+        st.caption("間違えて登録した対戦だけを削除できます。名前登録データは削除されません。")
+
+        game_summary = make_game_summary(results)
+        if game_summary:
+            options = {g["label"]: g for g in game_summary}
+            selected_label = st.selectbox("削除したい対戦を選択", list(options.keys()))
+            selected_game = options[selected_label]
+
+            st.markdown("**選択中の対戦**")
+            st.table([
+                {"名前": m["name"], "点数": m["point"]}
+                for m in selected_game["members"]
+            ])
+
+            if selected_game.get("memo"):
+                st.write(f"メモ：{selected_game['memo']}")
+
+            if st.session_state.delete_game_confirm_id != selected_game["game_id"]:
+                if st.button("この対戦を削除", use_container_width=True):
+                    st.session_state.delete_game_confirm_id = selected_game["game_id"]
+                    st.rerun()
+            else:
+                st.warning("この対戦を削除しますが、よろしいですか？")
+                yes_col, no_col = st.columns(2, gap="small")
+                with yes_col:
+                    if st.button("はい、削除します", use_container_width=True):
+                        ok, msg = delete_single_game(selected_game["game_id"])
+                        st.session_state.delete_game_confirm_id = None
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.warning(msg)
+                with no_col:
+                    if st.button("いいえ", use_container_width=True):
+                        st.session_state.delete_game_confirm_id = None
+                        st.rerun()
     else:
         st.info("まだデータがありません。")
 
