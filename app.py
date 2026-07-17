@@ -1,6 +1,6 @@
 import streamlit as st
 import requests
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from io import BytesIO
 import html as html_lib
@@ -368,22 +368,117 @@ def get_next_game_no(session_id=None):
     return int(games[0]["game_no"]) + 1
 
 
+def _parse_supabase_datetime(value):
+    """Supabaseの日時文字列をタイムゾーン付きdatetimeへ変換する。"""
+    if not value:
+        return None
+
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def is_recent_duplicate_game(points, session_id, seconds=30):
+    """
+    同じ対戦会で、同じ4人・同じ点数の記録が直近に存在するか確認する。
+    メモの内容は重複判定に含めない。
+    """
+    if session_id is None:
+        return False
+
+    recent_games = api_get(
+        "games",
+        {
+            "select": "id,created_at,session_id",
+            "session_id": f"eq.{int(session_id)}",
+            "order": "created_at.desc",
+            "limit": "5",
+        },
+    )
+
+    if not recent_games:
+        return False
+
+    now_utc = datetime.now(ZoneInfo("UTC"))
+    current_signature = sorted(
+        (int(player_id), int(point))
+        for player_id, point in points.items()
+    )
+
+    for game in recent_games:
+        created_at = _parse_supabase_datetime(game.get("created_at"))
+        if created_at is None:
+            continue
+
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=ZoneInfo("UTC"))
+
+        elapsed = now_utc - created_at.astimezone(ZoneInfo("UTC"))
+
+        # 一覧は新しい順なので、30秒を超えた時点で以降の確認は不要
+        if elapsed > timedelta(seconds=seconds):
+            break
+
+        rows = api_get(
+            "game_results",
+            {
+                "select": "player_id,point",
+                "game_id": f"eq.{game['id']}",
+                "order": "player_id.asc",
+            },
+        )
+
+        previous_signature = sorted(
+            (int(row["player_id"]), int(row["point"]))
+            for row in rows
+            if row.get("player_id") is not None
+        )
+
+        if previous_signature == current_signature:
+            return True
+
+    return False
+
+
 def save_game(points, memo, session_id=None):
+    """
+    戻り値:
+      success   登録成功
+      duplicate 直近30秒以内の同一内容
+      error     登録失敗
+    """
+    if is_recent_duplicate_game(points, session_id, seconds=30):
+        return "duplicate"
+
     game_no = get_next_game_no(session_id)
     game_data = {"game_no": game_no, "memo": memo}
+
     if session_id is not None:
         game_data["session_id"] = int(session_id)
+
     game = api_post("games", game_data)
     if not game:
-        return False
+        return "error"
 
     game_id = game[0]["id"]
     rows = []
+
     for player_id, point in points.items():
-        rows.append({"game_id": game_id, "player_id": player_id, "point": int(point)})
+        rows.append(
+            {
+                "game_id": game_id,
+                "player_id": int(player_id),
+                "point": int(point),
+            }
+        )
 
     result = api_post("game_results", rows)
-    return result is not None
+
+    if result is None:
+        return "error"
+
+    return "success"
 
 
 def get_results(session_id=None):
@@ -1077,6 +1172,12 @@ if "current_session_id" not in st.session_state:
     st.session_state.current_session_id = None
 if "save_complete" not in st.session_state:
     st.session_state.save_complete = False
+if "game_save_in_progress" not in st.session_state:
+    st.session_state.game_save_in_progress = False
+if "pending_game_save" not in st.session_state:
+    st.session_state.pending_game_save = None
+if "game_save_message" not in st.session_state:
+    st.session_state.game_save_message = None
 if "finish_confirm_session_id" not in st.session_state:
     st.session_state.finish_confirm_session_id = None
 if "resume_confirm_session_id" not in st.session_state:
@@ -1094,6 +1195,23 @@ def clear_hand_selection():
     for key in list(st.session_state.keys()):
         if str(key).startswith("manual_point_"):
             del st.session_state[key]
+
+
+def begin_game_save(points, memo, session_id):
+    """
+    登録ボタンを押した瞬間に連打を無効化し、
+    次の再描画で保存処理を1回だけ実行する。
+    """
+    if st.session_state.get("game_save_in_progress", False):
+        return
+
+    st.session_state.game_save_in_progress = True
+    st.session_state.game_save_message = None
+    st.session_state.pending_game_save = {
+        "points": {int(k): int(v) for k, v in points.items()},
+        "memo": memo,
+        "session_id": int(session_id) if session_id is not None else None,
+    }
 
 
 def go(page):
@@ -1536,6 +1654,36 @@ elif st.session_state.page == "start":
     st.title("🎮 対戦スタート")
     back_button()
 
+    # 登録ボタン押下後は、次の再描画で保存処理を1回だけ行う
+    pending_save = st.session_state.get("pending_game_save")
+
+    if st.session_state.get("game_save_in_progress", False) and pending_save:
+        st.info("登録中です…")
+        with st.spinner("対戦結果を登録しています。しばらくお待ちください。"):
+            save_status = save_game(
+                pending_save["points"],
+                pending_save["memo"],
+                session_id=pending_save["session_id"],
+            )
+
+        st.session_state.pending_game_save = None
+        st.session_state.game_save_in_progress = False
+
+        if save_status == "success":
+            st.session_state.save_complete = True
+            st.session_state.game_save_message = None
+        elif save_status == "duplicate":
+            st.session_state.game_save_message = (
+                "同じ対戦結果が直近30秒以内にすでに登録されています。"
+                "二重登録を防止したため、今回は登録していません。"
+            )
+        else:
+            st.session_state.game_save_message = (
+                "登録に失敗しました。通信状況を確認して、もう一度お試しください。"
+            )
+
+        st.rerun()
+
     if st.session_state.get("save_complete", False):
         clear_hand_selection()
         st.success("正常に登録されました。")
@@ -1553,6 +1701,9 @@ elif st.session_state.page == "start":
                 st.session_state.result_scope_default_session_id = st.session_state.current_session_id
                 go("score_list")
         st.stop()
+
+    if st.session_state.get("game_save_message"):
+        st.warning(st.session_state.game_save_message)
 
     # 進行中の対戦会を自動取得
     session = get_active_current_session()
@@ -1651,18 +1802,16 @@ elif st.session_state.page == "start":
         with st.expander("登録前の確認", expanded=False):
             st.table(preview)
 
-        if st.button(
-            "この対戦を登録する",
+        is_saving = st.session_state.get("game_save_in_progress", False)
+
+        st.button(
+            "登録中です…" if is_saving else "この対戦を登録する",
             type="primary",
             use_container_width=True,
-            disabled=(total != 0),
-        ):
-            ok = save_game(final_points, memo, session_id=session_id)
-            if ok:
-                st.session_state.save_complete = True
-                st.rerun()
-            else:
-                st.error("登録に失敗しました。")
+            disabled=(total != 0 or is_saving),
+            on_click=begin_game_save,
+            args=(final_points, memo, session_id),
+        )
 
         st.markdown("---")
         st.caption("選択を変更する場合は、下の名前をもう一度タップしてください。")
