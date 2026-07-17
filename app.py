@@ -1539,18 +1539,22 @@ elif st.session_state.page == "start":
     if st.session_state.get("save_complete", False):
         clear_hand_selection()
         st.success("正常に登録されました。")
-        st.info("次の半荘を登録する場合は、下のボタンから4人を選択してください。")
-        if st.button("次の対戦へ", type="primary", use_container_width=True):
-            st.session_state.save_complete = False
-            clear_hand_selection()
-            st.rerun()
-        if st.button("点数一覧を確認する", use_container_width=True):
-            st.session_state.save_complete = False
-            st.session_state.result_scope_default_session_id = st.session_state.current_session_id
-            go("score_list")
+        st.info("次の半荘を登録する場合は、下のボタンを押してください。")
+
+        next_col, list_col = st.columns(2, gap="small")
+        with next_col:
+            if st.button("次の対戦へ", type="primary", use_container_width=True):
+                st.session_state.save_complete = False
+                clear_hand_selection()
+                st.rerun()
+        with list_col:
+            if st.button("点数一覧を見る", use_container_width=True):
+                st.session_state.save_complete = False
+                st.session_state.result_scope_default_session_id = st.session_state.current_session_id
+                go("score_list")
         st.stop()
 
-    # 進行中の対戦会があれば自動で選択する
+    # 進行中の対戦会を自動取得
     session = get_active_current_session()
     session_id = session["id"] if session else None
 
@@ -1561,22 +1565,6 @@ elif st.session_state.page == "start":
         st.stop()
 
     session_players = get_session_players(session_id)
-    session_results = get_results(session_id=session_id)
-    session_ranking = make_enhanced_ranking(session_results)
-
-    st.subheader(f"{session.get('session_date')}　{session.get('title')}")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("参加者", f"{len(session_players)}人")
-    c2.metric("対戦数", f"{get_session_game_count(session_id)}戦")
-    c3.metric("状態", "進行中")
-
-    if session_ranking:
-        render_ranking_cards(session_ranking)
-
-    st.info("この対戦会を終了する場合は、ホームの『対戦会 設定/終了』から終了してください。")
-
-    st.markdown("---")
-    st.subheader("半荘を登録")
 
     if len(session_players) < 4:
         st.warning("この対戦会の参加者が4人未満です。『名前登録』から途中参加者を追加してください。")
@@ -1586,71 +1574,72 @@ elif st.session_state.page == "start":
 
     id_to_player = {p["id"]: p for p in session_players}
     valid_ids = {p["id"] for p in session_players}
-    st.session_state.selected_player_ids = [pid for pid in st.session_state.selected_player_ids if pid in valid_ids]
+    st.session_state.selected_player_ids = [
+        pid for pid in st.session_state.selected_player_ids if pid in valid_ids
+    ]
     selected_ids = st.session_state.selected_player_ids
-    st.info(f"現在 {len(selected_ids)} / 4人 選択中")
-    if selected_ids:
-        st.success("選択中：" + " / ".join([id_to_player[pid]["name"] for pid in selected_ids]))
 
-    reset_col, _ = st.columns([1.2, 3.8])
-    with reset_col:
-        if st.button("選択リセット", use_container_width=True):
-            clear_hand_selection()
-            st.rerun()
+    st.caption(f"{session.get('session_date')}　{session.get('title')}")
+    status_col, count_col = st.columns(2)
+    status_col.metric("選択人数", f"{len(selected_ids)} / 4人")
+    count_col.metric("現在", f"{get_next_game_no(session_id)}回戦")
 
-    for p in session_players:
-        pid = p["id"]
-        is_selected = pid in st.session_state.selected_player_ids
-        with st.container(border=True):
-            name_col, btn_col = st.columns([3.2, 1.0], gap="small")
-            with name_col:
-                order_text = f"　{selected_ids.index(pid) + 1}人目" if is_selected else ""
-                st.markdown(f'<div class="member-id-label">ID: {pid}{order_text}</div><div class="member-name-label">{p["name"]}</div>', unsafe_allow_html=True)
-            with btn_col:
-                st.markdown('<div class="button-spacer"></div>', unsafe_allow_html=True)
-                if is_selected:
-                    if st.button("解除", key=f"unselect_{pid}", use_container_width=True):
-                        st.session_state.selected_player_ids.remove(pid)
-                        key = f"manual_point_{pid}"
-                        if key in st.session_state:
-                            st.session_state[key] = 0
-                        st.rerun()
-                else:
-                    disabled = len(st.session_state.selected_player_ids) >= 4
-                    if st.button("選択", key=f"select_{pid}", use_container_width=True, disabled=disabled):
-                        st.session_state.selected_player_ids.append(pid)
-                        st.rerun()
+    # 4人選択済みなら、結果入力を先に表示
+    if len(selected_ids) == 4:
+        selected_players = [id_to_player[pid] for pid in selected_ids]
 
-    if len(st.session_state.selected_player_ids) != 4:
-        st.info("4人選択すると、半荘結果を入力できます。")
-    else:
-        selected_players = [id_to_player[pid] for pid in st.session_state.selected_player_ids]
         st.markdown("---")
-        st.subheader(f"{get_next_game_no(session_id)}回戦の結果を入力")
-        st.caption("全員手入力できます。点数は1刻みです。最後に入力する人は『集計』ボタンで合計0になる値を自動入力できます。")
+        st.subheader(f"{get_next_game_no(session_id)}回戦 結果入力")
+        st.caption("点数は1刻みです。最後の1人は『集計』で合計0にできます。")
 
         for i, player in enumerate(selected_players, start=1):
             with st.container(border=True):
-                name_col, score_col, auto_col = st.columns([2.0, 1.35, 0.9], gap="small")
+                name_col, score_col, auto_col = st.columns([1.45, 1.25, 0.8], gap="small")
+
                 with name_col:
-                    st.markdown(f'<div class="score-order">{i}人目</div><div class="score-name">{player["name"]}</div>', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="score-order">{i}人目</div>'
+                        f'<div class="score-name">{player["name"]}</div>',
+                        unsafe_allow_html=True,
+                    )
+
                 with score_col:
                     key = f"manual_point_{player['id']}"
                     if key not in st.session_state:
                         st.session_state[key] = 0
-                    st.number_input("点数", value=int(st.session_state[key]), step=1, key=key, label_visibility="collapsed")
+
+                    st.number_input(
+                        "点数",
+                        step=1,
+                        key=key,
+                        label_visibility="collapsed",
+                    )
+
                 with auto_col:
                     st.markdown('<div class="button-spacer"></div>', unsafe_allow_html=True)
-                    st.button("集計", key=f"zero_fill_{player['id']}", use_container_width=True, on_click=zero_fill_point, args=(player["id"], selected_players))
+                    st.button(
+                        "集計",
+                        key=f"zero_fill_{player['id']}",
+                        use_container_width=True,
+                        on_click=zero_fill_point,
+                        args=(player["id"], selected_players),
+                    )
 
-        total = sum(int(st.session_state.get(f"manual_point_{p['id']}", 0)) for p in selected_players)
+        total = sum(
+            int(st.session_state.get(f"manual_point_{p['id']}", 0))
+            for p in selected_players
+        )
+
         if total == 0:
             st.success("合計は0です。登録できます。")
         else:
             st.error(f"合計が {total} です。±0になっていないため登録できません。")
 
-        memo = st.text_input("メモ", placeholder="例：1回目、南場で逆転 など")
-        st.subheader("登録前確認")
+        memo = st.text_input(
+            "メモ",
+            placeholder="例：南場で逆転 など",
+        )
+
         preview = []
         final_points = {}
         for p in selected_players:
@@ -1658,18 +1647,74 @@ elif st.session_state.page == "start":
             final_points[p["id"]] = point
             preview.append({"名前": p["name"], "点数": point})
         preview.sort(key=lambda x: x["点数"], reverse=True)
-        st.table(preview)
 
-        if st.button("この対戦を登録する", type="primary", use_container_width=True):
-            if total != 0:
-                st.error("合計が±0になっていないため登録できません。")
+        with st.expander("登録前の確認", expanded=False):
+            st.table(preview)
+
+        if st.button(
+            "この対戦を登録する",
+            type="primary",
+            use_container_width=True,
+            disabled=(total != 0),
+        ):
+            ok = save_game(final_points, memo, session_id=session_id)
+            if ok:
+                st.session_state.save_complete = True
+                st.rerun()
             else:
-                ok = save_game(final_points, memo, session_id=session_id)
-                if ok:
-                    st.session_state.save_complete = True
+                st.error("登録に失敗しました。")
+
+        st.markdown("---")
+        st.caption("選択を変更する場合は、下の名前をもう一度タップしてください。")
+
+    else:
+        st.info("4人選択すると、結果入力画面が上に表示されます。")
+
+    # 名前選択一覧
+    st.subheader("参加者を選択")
+
+    if selected_ids:
+        selected_names = " / ".join(id_to_player[pid]["name"] for pid in selected_ids)
+        st.success(f"選択中：{selected_names}")
+
+    reset_col, spacer_col = st.columns([1.2, 2.8])
+    with reset_col:
+        if st.button("全解除", use_container_width=True):
+            clear_hand_selection()
+            st.rerun()
+
+    # スマホで見やすい2列グリッド
+    players_sorted = sorted(session_players, key=lambda p: str(p.get("name", "")))
+
+    for index in range(0, len(players_sorted), 2):
+        row_players = players_sorted[index:index + 2]
+        cols = st.columns(2, gap="small")
+
+        for col, player in zip(cols, row_players):
+            pid = player["id"]
+            is_selected = pid in st.session_state.selected_player_ids
+
+            with col:
+                label = f"✓ {player['name']}" if is_selected else player["name"]
+
+                # 選択済みは赤系のprimaryボタン、未選択は通常ボタン
+                if st.button(
+                    label,
+                    key=f"compact_player_{pid}",
+                    type="primary" if is_selected else "secondary",
+                    use_container_width=True,
+                    disabled=(not is_selected and len(st.session_state.selected_player_ids) >= 4),
+                ):
+                    if is_selected:
+                        st.session_state.selected_player_ids.remove(pid)
+                        score_key = f"manual_point_{pid}"
+                        if score_key in st.session_state:
+                            del st.session_state[score_key]
+                    else:
+                        st.session_state.selected_player_ids.append(pid)
+
                     st.rerun()
-                else:
-                    st.error("登録に失敗しました。")
+
 
 
 # =========================
