@@ -1671,6 +1671,52 @@ elif st.session_state.page == "start":
         st.info("4人選択すると、結果入力画面が上に表示されます。")
 
     # 名前選択一覧
+    st.markdown(
+        """
+        <style>
+        /* スマホでも参加者ボタンを必ず2列に固定 */
+        .st-key-player_grid div[data-testid="stHorizontalBlock"] {
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
+            gap: 0.45rem !important;
+        }
+
+        .st-key-player_grid div[data-testid="column"] {
+            flex: 1 1 50% !important;
+            width: 50% !important;
+            min-width: 0 !important;
+        }
+
+        .st-key-player_grid .stButton > button {
+            width: 100% !important;
+            min-height: 42px !important;
+            height: 42px !important;
+            padding: 0.2rem 0.35rem !important;
+            font-size: 0.88rem !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+        }
+
+        @media (max-width: 640px) {
+            .st-key-player_grid div[data-testid="stHorizontalBlock"] {
+                display: flex !important;
+                flex-direction: row !important;
+                flex-wrap: nowrap !important;
+            }
+
+            .st-key-player_grid div[data-testid="column"] {
+                flex: 1 1 calc(50% - 0.25rem) !important;
+                width: calc(50% - 0.25rem) !important;
+                min-width: 0 !important;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     st.subheader("参加者を選択")
 
     if selected_ids:
@@ -1683,37 +1729,38 @@ elif st.session_state.page == "start":
             clear_hand_selection()
             st.rerun()
 
-    # スマホで見やすい2列グリッド
+    # スマホでも必ず2列になる参加者グリッド
     players_sorted = sorted(session_players, key=lambda p: str(p.get("name", "")))
 
-    for index in range(0, len(players_sorted), 2):
-        row_players = players_sorted[index:index + 2]
-        cols = st.columns(2, gap="small")
+    with st.container(key="player_grid"):
+        for index in range(0, len(players_sorted), 2):
+            row_players = players_sorted[index:index + 2]
+            cols = st.columns(2, gap="small")
 
-        for col, player in zip(cols, row_players):
-            pid = player["id"]
-            is_selected = pid in st.session_state.selected_player_ids
+            for col, player in zip(cols, row_players):
+                pid = player["id"]
+                is_selected = pid in st.session_state.selected_player_ids
 
-            with col:
-                label = f"✓ {player['name']}" if is_selected else player["name"]
+                with col:
+                    label = f"✓ {player['name']}" if is_selected else player["name"]
 
-                # 選択済みは赤系のprimaryボタン、未選択は通常ボタン
-                if st.button(
-                    label,
-                    key=f"compact_player_{pid}",
-                    type="primary" if is_selected else "secondary",
-                    use_container_width=True,
-                    disabled=(not is_selected and len(st.session_state.selected_player_ids) >= 4),
-                ):
-                    if is_selected:
-                        st.session_state.selected_player_ids.remove(pid)
-                        score_key = f"manual_point_{pid}"
-                        if score_key in st.session_state:
-                            del st.session_state[score_key]
-                    else:
-                        st.session_state.selected_player_ids.append(pid)
+                    # 選択済みは色付き、未選択は通常表示
+                    if st.button(
+                        label,
+                        key=f"compact_player_{pid}",
+                        type="primary" if is_selected else "secondary",
+                        use_container_width=True,
+                        disabled=(not is_selected and len(st.session_state.selected_player_ids) >= 4),
+                    ):
+                        if is_selected:
+                            st.session_state.selected_player_ids.remove(pid)
+                            score_key = f"manual_point_{pid}"
+                            if score_key in st.session_state:
+                                del st.session_state[score_key]
+                        else:
+                            st.session_state.selected_player_ids.append(pid)
 
-                    st.rerun()
+                        st.rerun()
 
 
 
