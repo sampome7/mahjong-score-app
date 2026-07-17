@@ -1034,36 +1034,9 @@ st.markdown(
 
 
 # =========================
-# 簡易ログイン
+# ログイン認証なし
+# URLを開くと、そのままホーム画面を表示
 # =========================
-def normalize_login_word(text):
-    """合言葉のAI部分は大文字小文字・全角半角を吸収する。"""
-    return (
-        str(text)
-        .strip()
-        .replace("Ａ", "A")
-        .replace("ａ", "a")
-        .replace("Ｉ", "I")
-        .replace("ｉ", "i")
-        .upper()
-    )
-
-
-if "login" not in st.session_state:
-    st.session_state.login = False
-
-if not st.session_state.login:
-    st.title("🀄 麻雀スコア管理")
-    st.write("合言葉を入力してください。")
-    password = st.text_input("合言葉", type="password")
-    if st.button("ログイン", type="primary"):
-        if normalize_login_word(password) == "AI店長":
-            st.session_state.login = True
-            st.rerun()
-        else:
-            st.error("合言葉が違います。")
-    st.stop()
-
 
 # =========================
 # ページ状態
