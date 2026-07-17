@@ -532,6 +532,70 @@ def delete_single_game(game_id):
     return True, "指定した対戦を削除しました。"
 
 
+def delete_match_session_completely(session_id):
+    """
+    指定した終了済み対戦会と、その対戦会に紐づく全データを削除する。
+    """
+    session_id = int(session_id)
+    session = get_session(session_id)
+
+    if not session:
+        return False, "指定した対戦会が見つかりません。"
+
+    if session.get("status") != "finished":
+        return False, "進行中の対戦会は削除できません。先に終了してください。"
+
+    games = api_get(
+        "games",
+        {
+            "select": "id",
+            "session_id": f"eq.{session_id}",
+        },
+    )
+
+    # 外部キー制約に備えて子データから削除
+    for game in games:
+        game_id = game.get("id")
+        if game_id is None:
+            continue
+
+        if not api_delete_where(
+            "game_results",
+            {"game_id": f"eq.{int(game_id)}"},
+        ):
+            return False, "個人結果の削除に失敗しました。"
+
+    if not api_delete_where(
+        "games",
+        {"session_id": f"eq.{session_id}"},
+    ):
+        return False, "対戦記録の削除に失敗しました。"
+
+    if not api_delete_where(
+        "session_players",
+        {"session_id": f"eq.{session_id}"},
+    ):
+        return False, "参加者情報の削除に失敗しました。"
+
+    # 点数計算画面で保存したチップ数
+    api_delete_where(
+        "point_calc_chips",
+        {"scope_key": f"eq.{point_calc_scope_key(session_id)}"},
+    )
+
+    if not api_delete("match_sessions", session_id):
+        return False, "対戦会本体の削除に失敗しました。"
+
+    if st.session_state.get("current_session_id") == session_id:
+        st.session_state.current_session_id = None
+
+    if st.session_state.get("result_scope_default_session_id") == session_id:
+        st.session_state.result_scope_default_session_id = None
+
+    clear_hand_selection()
+    return True, "対戦会と、その対戦結果・個人成績をすべて削除しました。"
+
+
 def get_game_count(session_id=None):
     params = {"select": "id"}
     if session_id is not None:
@@ -1182,6 +1246,16 @@ if "finish_confirm_session_id" not in st.session_state:
     st.session_state.finish_confirm_session_id = None
 if "resume_confirm_session_id" not in st.session_state:
     st.session_state.resume_confirm_session_id = None
+if "session_delete_settings_open" not in st.session_state:
+    st.session_state.session_delete_settings_open = False
+if "session_delete_target_id" not in st.session_state:
+    st.session_state.session_delete_target_id = None
+if "session_delete_password_ok" not in st.session_state:
+    st.session_state.session_delete_password_ok = False
+if "session_delete_confirm_id" not in st.session_state:
+    st.session_state.session_delete_confirm_id = None
+if "session_delete_message" not in st.session_state:
+    st.session_state.session_delete_message = None
 if "result_scope_default_session_id" not in st.session_state:
     st.session_state.result_scope_default_session_id = None
 if "point_calc_score_rate" not in st.session_state:
@@ -1491,6 +1565,138 @@ elif st.session_state.page == "session_manage":
                         if st.button("いいえ", key=f"resume_no_{s['id']}", use_container_width=True):
                             st.session_state.resume_confirm_session_id = None
                             st.rerun()
+
+
+    st.markdown("---")
+    st.subheader("設定")
+    st.caption("終了済みの対戦会を完全に削除する管理機能です。")
+
+    if st.session_state.get("session_delete_message"):
+        st.success(st.session_state.session_delete_message)
+        st.session_state.session_delete_message = None
+
+    if not st.session_state.session_delete_settings_open:
+        if st.button("過去の対戦会を削除する", use_container_width=True):
+            st.session_state.session_delete_settings_open = True
+            st.session_state.session_delete_target_id = None
+            st.session_state.session_delete_password_ok = False
+            st.session_state.session_delete_confirm_id = None
+            st.rerun()
+    else:
+        with st.container(border=True):
+            st.warning(
+                "削除した対戦会は元に戻せません。"
+                "その対戦会の対戦結果・ランキング・個人成績もすべて削除されます。"
+            )
+
+            if not finished_sessions:
+                st.info("削除できる終了済みの対戦会はありません。")
+            else:
+                session_options = {
+                    int(s["id"]): (
+                        f"{get_session_label(s)}"
+                        f"（{get_session_game_count(s['id'])}戦）"
+                    )
+                    for s in finished_sessions
+                }
+                option_ids = list(session_options.keys())
+
+                selected_delete_session_id = st.selectbox(
+                    "削除する対戦会",
+                    options=option_ids,
+                    format_func=lambda sid: session_options[sid],
+                    index=(
+                        option_ids.index(st.session_state.session_delete_target_id)
+                        if st.session_state.session_delete_target_id in option_ids
+                        else 0
+                    ),
+                    key="session_delete_selectbox",
+                )
+
+                if st.session_state.session_delete_target_id != selected_delete_session_id:
+                    st.session_state.session_delete_target_id = selected_delete_session_id
+                    st.session_state.session_delete_password_ok = False
+                    st.session_state.session_delete_confirm_id = None
+
+                password = st.text_input(
+                    "管理者パスワード",
+                    type="password",
+                    key="session_delete_password",
+                    placeholder="パスワードを入力",
+                )
+
+                if not st.session_state.session_delete_password_ok:
+                    if st.button(
+                        "パスワードを確認",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        if password == "19831219":
+                            st.session_state.session_delete_password_ok = True
+                            st.session_state.session_delete_confirm_id = None
+                            st.rerun()
+                        else:
+                            st.error("パスワードが違います。")
+                else:
+                    st.success("パスワードを確認しました。")
+
+                    target_session = get_session(selected_delete_session_id)
+                    if target_session:
+                        st.markdown(f"**削除対象：{get_session_label(target_session)}**")
+                        st.caption(
+                            f"対戦数：{get_session_game_count(selected_delete_session_id)}戦"
+                        )
+
+                    if st.session_state.session_delete_confirm_id != selected_delete_session_id:
+                        if st.button(
+                            "この対戦会を削除する",
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            st.session_state.session_delete_confirm_id = selected_delete_session_id
+                            st.rerun()
+                    else:
+                        st.error(
+                            "本当に削除しますか？"
+                            "この対戦会の個人結果を含む全データが消去されます。"
+                        )
+
+                        yes_col, no_col = st.columns(2, gap="small")
+
+                        with yes_col:
+                            if st.button(
+                                "はい、完全に削除する",
+                                key=f"session_delete_yes_{selected_delete_session_id}",
+                                use_container_width=True,
+                            ):
+                                ok, msg = delete_match_session_completely(
+                                    selected_delete_session_id
+                                )
+                                if ok:
+                                    st.session_state.session_delete_settings_open = False
+                                    st.session_state.session_delete_target_id = None
+                                    st.session_state.session_delete_password_ok = False
+                                    st.session_state.session_delete_confirm_id = None
+                                    st.session_state.session_delete_message = msg
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
+
+                        with no_col:
+                            if st.button(
+                                "いいえ、戻る",
+                                key=f"session_delete_no_{selected_delete_session_id}",
+                                use_container_width=True,
+                            ):
+                                st.session_state.session_delete_confirm_id = None
+                                st.rerun()
+
+            if st.button("削除設定を閉じる", use_container_width=True):
+                st.session_state.session_delete_settings_open = False
+                st.session_state.session_delete_target_id = None
+                st.session_state.session_delete_password_ok = False
+                st.session_state.session_delete_confirm_id = None
+                st.rerun()
 
 
 # =========================
