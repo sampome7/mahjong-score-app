@@ -1246,6 +1246,8 @@ if "finish_confirm_session_id" not in st.session_state:
     st.session_state.finish_confirm_session_id = None
 if "resume_confirm_session_id" not in st.session_state:
     st.session_state.resume_confirm_session_id = None
+if "home_ranking_scope" not in st.session_state:
+    st.session_state.home_ranking_scope = "auto"
 if "session_delete_settings_open" not in st.session_state:
     st.session_state.session_delete_settings_open = False
 if "session_delete_target_id" not in st.session_state:
@@ -1298,20 +1300,88 @@ def go(page):
 # =========================
 if st.session_state.page == "home":
     st.title("🀄 麻雀スコア管理")
-    st.caption("メニューを選択してください。")
 
-    all_results = get_results()
     players = get_players()
-    metrics = build_dashboard_metrics(all_results, players)
+    all_sessions = get_sessions(include_finished=True)
+    active_session = get_active_current_session()
+
+    # TOP表示の選択肢
+    # auto: 進行中の対戦会があればその対戦会、なければ全期間
+    scope_options = ["auto", "all"] + [
+        f"session:{int(s['id'])}" for s in all_sessions
+    ]
+
+    def format_home_scope(value):
+        if value == "auto":
+            return "自動（進行中の対戦会／全期間）"
+        if value == "all":
+            return "全期間"
+
+        session_id = int(value.split(":", 1)[1])
+        session = next(
+            (s for s in all_sessions if int(s["id"]) == session_id),
+            None,
+        )
+        if not session:
+            return "削除済みの対戦会"
+
+        status_text = "進行中" if session.get("status") == "active" else "終了済み"
+        return f"{get_session_label(session)}（{status_text}）"
+
+    # 削除済みの対戦会が選択状態に残っていた場合は自動へ戻す
+    current_scope = st.session_state.get("home_ranking_scope", "auto")
+    if current_scope not in scope_options:
+        st.session_state.home_ranking_scope = "auto"
+
+    selected_scope = st.selectbox(
+        "TOPに表示するランキング",
+        options=scope_options,
+        format_func=format_home_scope,
+        key="home_ranking_scope",
+    )
+
+    selected_session = None
+
+    if selected_scope == "auto":
+        if active_session:
+            selected_session = active_session
+            scope_title = f"現在の対戦会：{get_session_label(active_session)}"
+            ranking_results = get_results(session_id=active_session["id"])
+        else:
+            scope_title = "全期間ランキング"
+            ranking_results = get_results()
+    elif selected_scope == "all":
+        scope_title = "全期間ランキング"
+        ranking_results = get_results()
+    else:
+        selected_session_id = int(selected_scope.split(":", 1)[1])
+        selected_session = next(
+            (s for s in all_sessions if int(s["id"]) == selected_session_id),
+            None,
+        )
+
+        if selected_session:
+            scope_title = f"指定した対戦会：{get_session_label(selected_session)}"
+            ranking_results = get_results(session_id=selected_session_id)
+        else:
+            scope_title = "全期間ランキング"
+            ranking_results = get_results()
+
+    st.caption(scope_title)
+
+    metrics = build_dashboard_metrics(ranking_results, players)
 
     c1, c2 = st.columns(2)
-    c1.metric("総対戦数", f"{metrics['総対戦数']}戦")
+    c1.metric("対象の対戦数", f"{metrics['総対戦数']}戦")
     c2.metric("登録メンバー", f"{metrics['登録メンバー']}人")
 
-    render_ranking_cards(metrics["ランキング"])
+    if metrics["ランキング"]:
+        render_ranking_cards(metrics["ランキング"])
+    else:
+        st.info("選択した期間には、まだ対戦結果が登録されていません。")
 
     with st.container(border=True):
-        st.markdown("**直近の対戦**")
+        st.markdown("**対象期間の直近対戦**")
         st.write(metrics["直近対戦"])
 
     st.markdown("---")
