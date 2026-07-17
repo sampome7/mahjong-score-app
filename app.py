@@ -316,12 +316,30 @@ def resume_session(session_id):
 
 
 def get_active_current_session():
+    """
+    現在進行中の対戦会を取得する。
+
+    ブラウザを閉じたり、別のスマホから開いた場合でも、
+    Supabaseに進行中の対戦会が残っていれば自動で再選択する。
+    """
     session_id = st.session_state.get("current_session_id")
-    if not session_id:
+
+    # セッション内に保存済みの対戦会が、まだ進行中ならそのまま使う
+    if session_id:
+        session = get_session(session_id)
+        if session and session.get("status") == "active":
+            return session
+
+    # セッション情報が消えていても、DB上の進行中対戦会を自動取得
+    active_sessions = get_sessions(include_finished=False)
+    if not active_sessions:
+        st.session_state.current_session_id = None
         return None
-    session = get_session(session_id)
-    if not session or session.get("status") != "active":
-        return None
+
+    # システム上は進行中の対戦会は1件想定。
+    # 万一複数ある場合は、一覧の先頭（最新）を使用する。
+    session = active_sessions[0]
+    st.session_state.current_session_id = session["id"]
     return session
 
 
@@ -1532,11 +1550,12 @@ elif st.session_state.page == "start":
             go("score_list")
         st.stop()
 
-    session_id = st.session_state.current_session_id
-    session = get_session(session_id) if session_id else None
+    # 進行中の対戦会があれば自動で選択する
+    session = get_active_current_session()
+    session_id = session["id"] if session else None
 
-    if not session or session.get("status") != "active":
-        st.warning("先に『対戦会 設定/終了』から、対戦会を設定してください。")
+    if not session:
+        st.warning("進行中の対戦会がありません。先に『対戦会 設定/終了』から対戦会を作成してください。")
         if st.button("対戦会 設定/終了へ", type="primary", use_container_width=True):
             go("session_manage")
         st.stop()
